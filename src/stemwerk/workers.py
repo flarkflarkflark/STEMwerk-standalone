@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import io
+import sys
 from typing import Dict, List, Optional
 
 from PySide6 import QtCore
@@ -35,11 +37,21 @@ class SeparationWorker(QtCore.QThread):
                 self.progress_updated.emit(percent, message)
 
             separator.on_progress = on_progress
-            result = separator.separate(
-                self._input_file,
-                self._output_dir,
-                stems=self._stems,
-            )
+
+            original_stdout = sys.stdout
+            original_stderr = sys.stderr
+            try:
+                sys.stdout = io.StringIO()
+                sys.stderr = io.StringIO()
+                result = separator.separate(
+                    self._input_file,
+                    self._output_dir,
+                    stems=self._stems,
+                )
+            finally:
+                sys.stdout = original_stdout
+                sys.stderr = original_stderr
+
             stem_paths: Dict[str, str] = {name: str(path) for name, path in result.stems.items()}
             self.finished.emit(stem_paths)
         except Exception as exc:

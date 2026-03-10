@@ -84,6 +84,9 @@ class Player:
         with self._lock:
             return dict(self._levels)
 
+    def get_stem_levels(self) -> Dict[str, float]:
+        return self.get_levels()
+
     def set_position(self, seconds: float) -> None:
         with self._lock:
             self._position_samples = int(max(0.0, seconds) * self._sample_rate)

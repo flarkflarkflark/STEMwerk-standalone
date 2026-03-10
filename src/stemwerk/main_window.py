@@ -6,8 +6,8 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 import numpy as np
-import soundfile as sf
 import sounddevice as sd
+import soundfile as sf
 from PySide6 import QtCore, QtGui, QtWidgets
 
 from stemwerk_core import get_available_devices
@@ -15,76 +15,21 @@ from stemwerk_core import get_available_devices
 from .export_dialog import ExportDialog
 from .player import Player
 from .themes import THEMES
+from .vertical_slider import VerticalStemSlider
 from .waveform_widget import WaveformWidget
 from .workers import SeparationWorker
 
 
 STEMS_4 = ["vocals", "drums", "bass", "other"]
 STEMS_6 = ["vocals", "drums", "bass", "other", "guitar", "piano"]
-
-
-class VolumeSlider(QtWidgets.QSlider):
-    def __init__(self, color: str, parent: Optional[QtWidgets.QWidget] = None) -> None:
-        super().__init__(QtCore.Qt.Orientation.Horizontal, parent)
-        self._color = color
-        self._track_color = "#1a1a1a"
-        self._vu_level = 0.0
-        self.setRange(0, 100)
-        self.setValue(100)
-        self.setMinimumHeight(28)
-
-    def set_color(self, color: str) -> None:
-        self._color = color
-        self.update()
-
-    def set_level(self, level: float) -> None:
-        self._vu_level = max(0.0, min(1.0, level))
-        self.update()
-
-    def paintEvent(self, event: QtGui.QPaintEvent) -> None:
-        painter = QtGui.QPainter(self)
-        painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing, True)
-        rect = self.rect()
-        margin = 8
-        vu_height = 6
-        top_height = rect.height() - vu_height
-        track_height = 6
-        track_y = (top_height - track_height) / 2.0
-        track = QtCore.QRectF(
-            margin,
-            track_y,
-            max(0.0, rect.width() - margin * 2),
-            track_height,
-        )
-
-        painter.setPen(QtCore.Qt.PenStyle.NoPen)
-        painter.setBrush(QtGui.QColor(self._track_color))
-        painter.drawRoundedRect(track, 3, 3)
-
-        span = self.maximum() - self.minimum()
-        ratio = 0.0 if span == 0 else (self.value() - self.minimum()) / float(span)
-        fill = QtCore.QRectF(track.left(), track.top(), track.width() * ratio, track.height())
-        painter.setBrush(QtGui.QColor(self._color))
-        painter.drawRoundedRect(fill, 3, 3)
-
-        handle_x = track.left() + track.width() * ratio
-        painter.setPen(QtGui.QPen(QtGui.QColor("#ffffff"), 1))
-        painter.setBrush(QtGui.QColor(self._color))
-        painter.drawEllipse(QtCore.QPointF(handle_x, track.center().y()), 6, 6)
-
-        vu_rect = QtCore.QRectF(
-            margin,
-            rect.height() - vu_height,
-            max(0.0, rect.width() - margin * 2),
-            vu_height,
-        )
-        painter.setPen(QtCore.Qt.PenStyle.NoPen)
-        painter.setBrush(QtGui.QColor(self._track_color))
-        painter.drawRect(vu_rect)
-        if self._vu_level > 0.0:
-            fill_width = vu_rect.width() * self._vu_level
-            painter.setBrush(QtGui.QColor(self._color))
-            painter.drawRect(QtCore.QRectF(vu_rect.left(), vu_rect.top(), fill_width, vu_rect.height()))
+STEM_LABELS = {
+    "vocals": "VOC",
+    "drums": "DRM",
+    "bass": "BASS",
+    "other": "OTH",
+    "guitar": "GTR",
+    "piano": "PNO",
+}
 
 
 class MainWindow(QtWidgets.QMainWindow):
@@ -124,7 +69,7 @@ class MainWindow(QtWidgets.QMainWindow):
         }
 
         self._stems_panel: Optional[QtWidgets.QFrame] = None
-        self._stems_layout: Optional[QtWidgets.QGridLayout] = None
+        self._stems_layout: Optional[QtWidgets.QHBoxLayout] = None
         self.stem_controls: Dict[str, Dict[str, QtWidgets.QWidget]] = {}
 
         self._build_ui()
@@ -182,24 +127,17 @@ class MainWindow(QtWidgets.QMainWindow):
         self.waveform.position_clicked.connect(self._on_waveform_clicked)
 
         self._stems_panel = QtWidgets.QFrame()
-        self._stems_panel.setMinimumHeight(120)
-        self._stems_layout = QtWidgets.QGridLayout(self._stems_panel)
+        self._stems_panel.setMinimumHeight(200)
+        self._stems_layout = QtWidgets.QHBoxLayout(self._stems_panel)
         self._stems_layout.setContentsMargins(8, 8, 8, 8)
-        self._stems_layout.setHorizontalSpacing(8)
-        self._stems_layout.setVerticalSpacing(6)
-        self._stems_layout.setColumnMinimumWidth(0, 24)
-        self._stems_layout.setColumnMinimumWidth(1, 20)
-        self._stems_layout.setColumnMinimumWidth(2, 60)
-        self._stems_layout.setColumnMinimumWidth(3, 32)
-        self._stems_layout.setColumnMinimumWidth(4, 32)
-        self._stems_layout.setColumnStretch(5, 1)
+        self._stems_layout.setSpacing(12)
 
         self._rebuild_stem_controls(self._current_stems_for_model(), preserve_states=False)
 
         splitter = QtWidgets.QSplitter(QtCore.Qt.Orientation.Vertical)
         splitter.addWidget(self.waveform)
         splitter.addWidget(self._stems_panel)
-        splitter.setStretchFactor(0, 3)
+        splitter.setStretchFactor(0, 2)
         splitter.setStretchFactor(1, 1)
 
         transport = QtWidgets.QFrame()
@@ -274,7 +212,7 @@ class MainWindow(QtWidgets.QMainWindow):
         previous: Dict[str, Dict[str, object]] = {}
         if preserve_states:
             for stem, controls in self.stem_controls.items():
-                volume_slider: VolumeSlider = controls["volume"]  # type: ignore[assignment]
+                volume_slider: VerticalStemSlider = controls["volume"]  # type: ignore[assignment]
                 previous[stem] = {
                     "checked": controls["checkbox"].isChecked(),
                     "solo": controls["solo"].isChecked(),
@@ -289,29 +227,28 @@ class MainWindow(QtWidgets.QMainWindow):
                 widget.deleteLater()
 
         self.stem_controls = {}
-        for row, stem in enumerate(stems):
-            self._stems_layout.setRowMinimumHeight(row, 40)
+        for stem in stems:
+            column = QtWidgets.QWidget()
+            column_layout = QtWidgets.QVBoxLayout(column)
+            column_layout.setContentsMargins(4, 4, 4, 4)
+            column_layout.setSpacing(6)
+            column_layout.setAlignment(QtCore.Qt.AlignmentFlag.AlignTop)
 
-            checkbox = QtWidgets.QCheckBox()
-            checkbox.setFixedWidth(24)
-            checkbox.setChecked(bool(previous.get(stem, {}).get("checked", True)))
-            checkbox.setToolTip("Include this stem in separation")
-            checkbox.stateChanged.connect(self._update_stem_states)
+            label = QtWidgets.QToolButton()
+            label.setText(STEM_LABELS.get(stem, stem[:3].upper()))
+            label.setToolButtonStyle(QtCore.Qt.ToolButtonStyle.ToolButtonTextOnly)
+            label.setAutoRaise(True)
+            label.setFixedHeight(22)
+            label.setStyleSheet(f"color: {self._stem_colors[stem]}; border: none; font-weight: 600;")
+            label.clicked.connect(lambda _, s=stem: self._select_stem(s))
 
-            color = QtWidgets.QLabel()
-            color.setFixedSize(20, 20)
-            color.setStyleSheet(f"background: {self._stem_colors[stem]}; border: 1px solid #000000;")
-
-            name_button = QtWidgets.QToolButton()
-            name_button.setText(stem.capitalize())
-            name_button.setFixedWidth(60)
-            name_button.setToolButtonStyle(QtCore.Qt.ToolButtonStyle.ToolButtonTextOnly)
-            name_button.setStyleSheet("border: none; text-align: left;")
-            name_button.clicked.connect(lambda _, s=stem: self._select_stem(s))
+            buttons_row = QtWidgets.QHBoxLayout()
+            buttons_row.setSpacing(4)
+            buttons_row.setContentsMargins(0, 0, 0, 0)
 
             solo_button = QtWidgets.QToolButton()
             solo_button.setText("S")
-            solo_button.setFixedWidth(32)
+            solo_button.setFixedSize(24, 24)
             solo_button.setCheckable(True)
             solo_button.setChecked(bool(previous.get(stem, {}).get("solo", False)))
             solo_button.setToolTip("Solo this stem (only play this stem)")
@@ -319,31 +256,38 @@ class MainWindow(QtWidgets.QMainWindow):
 
             mute_button = QtWidgets.QToolButton()
             mute_button.setText("M")
-            mute_button.setFixedWidth(32)
+            mute_button.setFixedSize(24, 24)
             mute_button.setCheckable(True)
             mute_button.setChecked(bool(previous.get(stem, {}).get("mute", False)))
             mute_button.setToolTip("Mute this stem")
             mute_button.toggled.connect(lambda checked, s=stem: self._on_mute_toggled(s, checked))
 
-            volume_slider = VolumeSlider(self._stem_colors[stem])
-            volume_slider.setMinimumWidth(200)
-            volume_slider.setValue(int(previous.get(stem, {}).get("volume", 100.0)))
-            volume_slider.valueChanged.connect(self._update_stem_states)
-            volume_slider.setToolTip(f"Volume: {volume_slider.value()}%")
+            buttons_row.addWidget(solo_button)
+            buttons_row.addWidget(mute_button)
 
-            self._stems_layout.addWidget(checkbox, row, 0)
-            self._stems_layout.addWidget(color, row, 1)
-            self._stems_layout.addWidget(name_button, row, 2)
-            self._stems_layout.addWidget(solo_button, row, 3)
-            self._stems_layout.addWidget(mute_button, row, 4)
-            self._stems_layout.addWidget(volume_slider, row, 5)
+            checkbox = QtWidgets.QCheckBox()
+            checkbox.setChecked(bool(previous.get(stem, {}).get("checked", True)))
+            checkbox.setToolTip("Include this stem in separation")
+            checkbox.setFixedSize(20, 20)
+
+            slider = VerticalStemSlider(self._stem_colors[stem], stem)
+            slider.setValue(int(previous.get(stem, {}).get("volume", 100.0)))
+            slider.valueChanged.connect(self._update_waveform_state)
+            slider.setToolTip(f"Volume: {slider.value()}%")
+
+            column_layout.addWidget(label, alignment=QtCore.Qt.AlignmentFlag.AlignHCenter)
+            column_layout.addLayout(buttons_row)
+            column_layout.addWidget(checkbox, alignment=QtCore.Qt.AlignmentFlag.AlignHCenter)
+            column_layout.addWidget(slider, 1)
+
+            self._stems_layout.addWidget(column, 1)
 
             self.stem_controls[stem] = {
                 "checkbox": checkbox,
                 "solo": solo_button,
                 "mute": mute_button,
-                "volume": volume_slider,
-                "name": name_button,
+                "volume": slider,
+                "name": label,
             }
 
         if stems:
@@ -355,7 +299,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self._player.prune_stem_states(stems)
         self._apply_button_styles()
-        self._update_stem_states()
+        self._update_waveform_state()
 
     def _toggle_stem_checkbox(self, stem: str) -> None:
         controls = self.stem_controls.get(stem)
@@ -393,7 +337,7 @@ class MainWindow(QtWidgets.QMainWindow):
             mute_button.blockSignals(True)
             mute_button.setChecked(False)
             mute_button.blockSignals(False)
-        self._update_stem_states()
+        self._update_waveform_state()
 
     def _on_mute_toggled(self, stem: str, checked: bool) -> None:
         controls = self.stem_controls.get(stem)
@@ -404,7 +348,7 @@ class MainWindow(QtWidgets.QMainWindow):
             solo_button.blockSignals(True)
             solo_button.setChecked(False)
             solo_button.blockSignals(False)
-        self._update_stem_states()
+        self._update_waveform_state()
 
     def _refresh_devices(self) -> None:
         self.device_combo.clear()
@@ -451,7 +395,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._stem_audio = {}
         self._stem_files = {}
         self.waveform.set_audio_data(data, sample_rate)
-        self._update_stem_states()
+        self._update_waveform_state()
         self._update_transport_state(True)
         self._update_status()
 
@@ -533,7 +477,7 @@ class MainWindow(QtWidgets.QMainWindow):
         if available_stems:
             self._rebuild_stem_controls(available_stems, preserve_states=True)
         else:
-            self._update_stem_states()
+            self._update_waveform_state()
 
         self._update_transport_state(True)
         self._update_status()
@@ -568,17 +512,27 @@ class MainWindow(QtWidgets.QMainWindow):
                 mute_button.setStyleSheet("background: #2a2a2a; color: #888; border: 1px solid #444;")
 
     def _update_stem_states(self) -> None:
-        stem_states: Dict[str, Dict[str, object]] = {}
         for stem, controls in self.stem_controls.items():
             solo = controls["solo"].isChecked()
             mute = controls["mute"].isChecked()
-            volume_slider: VolumeSlider = controls["volume"]  # type: ignore[assignment]
+            volume_slider: VerticalStemSlider = controls["volume"]  # type: ignore[assignment]
             volume = volume_slider.value() / 100.0
             volume_slider.setToolTip(f"Volume: {int(volume * 100)}%")
             self._player.update_stem_state(stem, solo, mute, volume)
-            stem_states[stem] = {"solo": solo, "mute": mute, "volume": volume}
         self._apply_button_styles()
-        self.waveform.set_stem_states(stem_states)
+
+    def _update_waveform_state(self) -> None:
+        self._update_stem_states()
+        any_solo = any(controls["solo"].isChecked() for controls in self.stem_controls.values())
+        states: Dict[str, Dict[str, object]] = {}
+        for stem, controls in self.stem_controls.items():
+            solo = controls["solo"].isChecked()
+            mute = controls["mute"].isChecked()
+            volume_slider: VerticalStemSlider = controls["volume"]  # type: ignore[assignment]
+            volume = volume_slider.value() / 100.0
+            visible = (not mute) and (not any_solo or solo)
+            states[stem] = {"visible": visible, "opacity": volume}
+        self.waveform.set_stem_visibility(states)
 
     def _toggle_play(self) -> None:
         if self._audio_data is None:
@@ -677,15 +631,15 @@ class MainWindow(QtWidgets.QMainWindow):
     def _update_vu_meters(self) -> None:
         if not self._player.is_playing:
             return
-        levels = self._player.get_levels()
+        levels = self._player.get_stem_levels()
         for stem, controls in self.stem_controls.items():
-            volume_slider: VolumeSlider = controls["volume"]  # type: ignore[assignment]
-            volume_slider.set_level(levels.get(stem, 0.0))
+            volume_slider: VerticalStemSlider = controls["volume"]  # type: ignore[assignment]
+            volume_slider.set_vu_level(levels.get(stem, 0.0))
 
     def _clear_vu_meters(self) -> None:
         for controls in self.stem_controls.values():
-            volume_slider: VolumeSlider = controls["volume"]  # type: ignore[assignment]
-            volume_slider.set_level(0.0)
+            volume_slider: VerticalStemSlider = controls["volume"]  # type: ignore[assignment]
+            volume_slider.set_vu_level(0.0)
 
     def _format_time(self, seconds: float) -> str:
         minutes = int(seconds) // 60
