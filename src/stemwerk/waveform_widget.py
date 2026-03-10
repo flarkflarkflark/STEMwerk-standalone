@@ -7,6 +7,8 @@ from PySide6 import QtCore, QtGui, QtWidgets
 
 
 class WaveformWidget(QtWidgets.QWidget):
+    position_clicked = QtCore.Signal(float)
+
     def __init__(self, parent: Optional[QtWidgets.QWidget] = None) -> None:
         super().__init__(parent)
         self._audio_mono: Optional[np.ndarray] = None
@@ -14,10 +16,11 @@ class WaveformWidget(QtWidgets.QWidget):
         self._peaks: Optional[Tuple[np.ndarray, np.ndarray]] = None
         self._stem_overlays: Dict[str, np.ndarray] = {}
         self._stem_colors: Dict[str, str] = {}
+        self._stem_states: Dict[str, Dict[str, bool]] = {}
         self._stem_peaks: Dict[str, Tuple[np.ndarray, np.ndarray]] = {}
         self._playhead_seconds: float = 0.0
         self._last_width: int = 0
-        self.setMinimumHeight(200)
+        self.setMinimumHeight(150)
 
     def set_audio_data(self, audio: np.ndarray, sample_rate: int) -> None:
         if audio.ndim == 2:
@@ -29,6 +32,7 @@ class WaveformWidget(QtWidgets.QWidget):
         self._peaks = None
         self._stem_overlays = {}
         self._stem_colors = {}
+        self._stem_states = {}
         self._stem_peaks = {}
         self._playhead_seconds = 0.0
         self.update()
@@ -37,6 +41,10 @@ class WaveformWidget(QtWidgets.QWidget):
         self._stem_overlays = stems
         self._stem_colors = colors
         self._stem_peaks = {}
+        self.update()
+
+    def set_stem_states(self, states: Dict[str, Dict[str, bool]]) -> None:
+        self._stem_states = states
         self.update()
 
     def set_playhead(self, seconds: float) -> None:
@@ -75,7 +83,7 @@ class WaveformWidget(QtWidgets.QWidget):
         color: QtGui.QColor,
         alpha: int,
     ) -> None:
-        if mins.size == 0 or maxs.size == 0:
+        if mins.size == 0 or maxs.size == 0 or alpha <= 0:
             return
         width = self.width()
         height = self.height()
@@ -115,14 +123,22 @@ class WaveformWidget(QtWidgets.QWidget):
         mins, maxs = self._peaks
         self._draw_waveform(painter, mins, maxs, self.palette().highlight().color(), 120)
 
+        any_solo = any(state.get("solo") for state in self._stem_states.values())
         for stem_name, stem_data in self._stem_overlays.items():
+            state = self._stem_states.get(stem_name, {"enabled": True, "solo": False, "mute": False})
+            if not state.get("enabled", True) or state.get("mute"):
+                continue
             peaks = self._stem_peaks.get(stem_name)
             if peaks is None or self._last_width != width:
                 peaks = self._build_peaks(stem_data, width)
                 self._stem_peaks[stem_name] = peaks
             color_hex = self._stem_colors.get(stem_name, "#ffffff")
             stem_color = QtGui.QColor(color_hex)
-            self._draw_waveform(painter, peaks[0], peaks[1], stem_color, 90)
+            if any_solo:
+                opacity = 0.8 if state.get("solo") else 0.1
+            else:
+                opacity = 0.8
+            self._draw_waveform(painter, peaks[0], peaks[1], stem_color, int(opacity * 255))
 
         if self._sample_rate and self._audio_mono.size > 0:
             total_seconds = self._audio_mono.size / float(self._sample_rate)
@@ -131,3 +147,12 @@ class WaveformWidget(QtWidgets.QWidget):
                 x = int(ratio * width)
                 painter.setPen(QtGui.QPen(QtGui.QColor("#ffffff"), 1))
                 painter.drawLine(x, 0, x, self.height())
+
+    def mousePressEvent(self, event: QtGui.QMouseEvent) -> None:
+        if self._sample_rate is None or self._audio_mono is None:
+            return
+        if self.width() <= 0:
+            return
+        total_seconds = self._audio_mono.size / float(self._sample_rate)
+        ratio = max(0.0, min(event.position().x() / float(self.width()), 1.0))
+        self.position_clicked.emit(ratio * total_seconds)

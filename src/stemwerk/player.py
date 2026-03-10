@@ -26,6 +26,7 @@ class Player:
         self._lock = threading.Lock()
         self._stems: Dict[str, np.ndarray] = {}
         self._stem_states: Dict[str, StemState] = {}
+        self._levels: Dict[str, float] = {}
         self.on_position_changed: Optional[Callable[[float], None]] = None
 
     def load_audio(self, data: np.ndarray, sample_rate: int) -> None:
@@ -63,6 +64,7 @@ class Player:
     def clear_stems(self) -> None:
         self._stems = {}
         self._stem_states = {}
+        self._levels = {}
 
     @property
     def is_playing(self) -> bool:
@@ -72,9 +74,20 @@ class Player:
     def position(self) -> float:
         return self._position_samples / float(self._sample_rate)
 
+    def get_levels(self) -> Dict[str, float]:
+        with self._lock:
+            return dict(self._levels)
+
     def set_position(self, seconds: float) -> None:
         with self._lock:
             self._position_samples = int(max(0.0, seconds) * self._sample_rate)
+
+    def seek(self, seconds: float) -> None:
+        with self._lock:
+            self._position_samples = int(max(0.0, seconds) * self._sample_rate)
+        if self.is_playing:
+            self.stop()
+            self.play()
 
     def play(self) -> None:
         if self._data is None:
@@ -115,9 +128,12 @@ class Player:
             if segment.shape[0] < frames:
                 pad = np.zeros((frames - segment.shape[0], self._channels), dtype=np.float32)
                 segment = np.vstack([segment, pad])
+            with self._lock:
+                self._levels = {name: 0.0 for name in self._stem_states}
             return segment
 
         mix = np.zeros((frames, self._channels), dtype=np.float32)
+        levels: Dict[str, float] = {name: 0.0 for name in self._stem_states}
         for name, state in active.items():
             data = self._stems.get(name)
             if data is None:
@@ -127,7 +143,13 @@ class Player:
             if segment.shape[0] < frames:
                 pad = np.zeros((frames - segment.shape[0], self._channels), dtype=np.float32)
                 segment = np.vstack([segment, pad])
-            mix += segment * float(state.volume)
+            volume = float(state.volume)
+            mix += segment * volume
+            if segment.size > 0:
+                rms = float(np.sqrt(np.mean(np.square(segment))))
+                levels[name] = min(1.0, rms * volume)
+        with self._lock:
+            self._levels = levels
         return mix
 
     def _callback(self, outdata: np.ndarray, frames: int, time, status) -> None:
