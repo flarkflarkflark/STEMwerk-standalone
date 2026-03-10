@@ -1,9 +1,15 @@
 from __future__ import annotations
 
-from typing import Dict, Optional, Tuple
+from typing import Dict, Optional, Tuple, TypedDict
 
 import numpy as np
 from PySide6 import QtCore, QtGui, QtWidgets
+
+
+class StemVisualState(TypedDict):
+    solo: bool
+    mute: bool
+    volume: float
 
 
 class WaveformWidget(QtWidgets.QWidget):
@@ -16,7 +22,7 @@ class WaveformWidget(QtWidgets.QWidget):
         self._peaks: Optional[Tuple[np.ndarray, np.ndarray]] = None
         self._stem_overlays: Dict[str, np.ndarray] = {}
         self._stem_colors: Dict[str, str] = {}
-        self._stem_states: Dict[str, Dict[str, bool]] = {}
+        self._stem_states: Dict[str, StemVisualState] = {}
         self._stem_peaks: Dict[str, Tuple[np.ndarray, np.ndarray]] = {}
         self._playhead_seconds: float = 0.0
         self._last_width: int = 0
@@ -43,7 +49,7 @@ class WaveformWidget(QtWidgets.QWidget):
         self._stem_peaks = {}
         self.update()
 
-    def set_stem_states(self, states: Dict[str, Dict[str, bool]]) -> None:
+    def set_stem_states(self, states: Dict[str, StemVisualState]) -> None:
         self._stem_states = states
         self.update()
 
@@ -121,24 +127,41 @@ class WaveformWidget(QtWidgets.QWidget):
             self._last_width = width
 
         mins, maxs = self._peaks
-        self._draw_waveform(painter, mins, maxs, self.palette().highlight().color(), 120)
+        default_state: StemVisualState = {"solo": False, "mute": False, "volume": 1.0}
+        stem_states = {
+            stem: self._stem_states.get(stem, default_state) for stem in self._stem_overlays.keys()
+        }
 
-        any_solo = any(state.get("solo") for state in self._stem_states.values())
-        for stem_name, stem_data in self._stem_overlays.items():
-            state = self._stem_states.get(stem_name, {"enabled": True, "solo": False, "mute": False})
-            if not state.get("enabled", True) or state.get("mute"):
-                continue
-            peaks = self._stem_peaks.get(stem_name)
-            if peaks is None or self._last_width != width:
-                peaks = self._build_peaks(stem_data, width)
-                self._stem_peaks[stem_name] = peaks
-            color_hex = self._stem_colors.get(stem_name, "#ffffff")
-            stem_color = QtGui.QColor(color_hex)
-            if any_solo:
-                opacity = 0.8 if state.get("solo") else 0.1
-            else:
-                opacity = 0.8
-            self._draw_waveform(painter, peaks[0], peaks[1], stem_color, int(opacity * 255))
+        any_solo = any(state["solo"] for state in stem_states.values())
+        all_muted = bool(stem_states) and all(state["mute"] for state in stem_states.values())
+        show_original = not stem_states or all_muted
+
+        if show_original:
+            self._draw_waveform(painter, mins, maxs, self.palette().highlight().color(), 120)
+            label_color = QtGui.QColor(self.palette().text().color())
+            label_color.setAlphaF(0.4)
+            font = painter.font()
+            font.setPointSize(18)
+            painter.setFont(font)
+            painter.setPen(label_color)
+            painter.drawText(rect, QtCore.Qt.AlignmentFlag.AlignCenter, "Original Mix")
+
+        if not show_original:
+            for stem_name, stem_data in self._stem_overlays.items():
+                state = stem_states.get(stem_name, default_state)
+                if state["mute"]:
+                    continue
+                peaks = self._stem_peaks.get(stem_name)
+                if peaks is None or self._last_width != width:
+                    peaks = self._build_peaks(stem_data, width)
+                    self._stem_peaks[stem_name] = peaks
+                color_hex = self._stem_colors.get(stem_name, "#ffffff")
+                stem_color = QtGui.QColor(color_hex)
+                base_opacity = 0.8 if (not any_solo or state["solo"]) else 0.1
+                opacity = base_opacity * max(0.0, min(1.0, float(state["volume"])))
+                if opacity <= 0.0:
+                    continue
+                self._draw_waveform(painter, peaks[0], peaks[1], stem_color, int(opacity * 255))
 
         if self._sample_rate and self._audio_mono.size > 0:
             total_seconds = self._audio_mono.size / float(self._sample_rate)

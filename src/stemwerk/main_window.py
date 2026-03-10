@@ -7,42 +7,53 @@ from typing import Dict, List, Optional
 
 import numpy as np
 import soundfile as sf
+import sounddevice as sd
 from PySide6 import QtCore, QtGui, QtWidgets
 
 from stemwerk_core import get_available_devices
 
+from .export_dialog import ExportDialog
 from .player import Player
 from .themes import THEMES
 from .waveform_widget import WaveformWidget
 from .workers import SeparationWorker
 
 
-STEMS = ["vocals", "drums", "bass", "other"]
+STEMS_4 = ["vocals", "drums", "bass", "other"]
+STEMS_6 = ["vocals", "drums", "bass", "other", "guitar", "piano"]
 
 
-class ColorSlider(QtWidgets.QSlider):
+class VolumeSlider(QtWidgets.QSlider):
     def __init__(self, color: str, parent: Optional[QtWidgets.QWidget] = None) -> None:
         super().__init__(QtCore.Qt.Orientation.Horizontal, parent)
         self._color = color
         self._track_color = "#1a1a1a"
+        self._vu_level = 0.0
         self.setRange(0, 100)
         self.setValue(100)
-        self.setMinimumHeight(16)
+        self.setMinimumHeight(28)
 
     def set_color(self, color: str) -> None:
         self._color = color
+        self.update()
+
+    def set_level(self, level: float) -> None:
+        self._vu_level = max(0.0, min(1.0, level))
         self.update()
 
     def paintEvent(self, event: QtGui.QPaintEvent) -> None:
         painter = QtGui.QPainter(self)
         painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing, True)
         rect = self.rect()
-        track_height = 6
         margin = 8
+        vu_height = 6
+        top_height = rect.height() - vu_height
+        track_height = 6
+        track_y = (top_height - track_height) / 2.0
         track = QtCore.QRectF(
             margin,
-            rect.center().y() - track_height / 2,
-            rect.width() - margin * 2,
+            track_y,
+            max(0.0, rect.width() - margin * 2),
             track_height,
         )
 
@@ -50,7 +61,8 @@ class ColorSlider(QtWidgets.QSlider):
         painter.setBrush(QtGui.QColor(self._track_color))
         painter.drawRoundedRect(track, 3, 3)
 
-        ratio = (self.value() - self.minimum()) / float(self.maximum() - self.minimum())
+        span = self.maximum() - self.minimum()
+        ratio = 0.0 if span == 0 else (self.value() - self.minimum()) / float(span)
         fill = QtCore.QRectF(track.left(), track.top(), track.width() * ratio, track.height())
         painter.setBrush(QtGui.QColor(self._color))
         painter.drawRoundedRect(fill, 3, 3)
@@ -58,47 +70,21 @@ class ColorSlider(QtWidgets.QSlider):
         handle_x = track.left() + track.width() * ratio
         painter.setPen(QtGui.QPen(QtGui.QColor("#ffffff"), 1))
         painter.setBrush(QtGui.QColor(self._color))
-        painter.drawEllipse(QtCore.QPointF(handle_x, rect.center().y()), 6, 6)
+        painter.drawEllipse(QtCore.QPointF(handle_x, track.center().y()), 6, 6)
 
-
-class VUMeterWidget(QtWidgets.QWidget):
-    def __init__(self, color: str, parent: Optional[QtWidgets.QWidget] = None) -> None:
-        super().__init__(parent)
-        self._level = 0.0
-        self._color = color
-        self._background = "#1a1a1a"
-        self.setFixedHeight(4)
-
-    def set_level(self, level: float) -> None:
-        self._level = max(0.0, min(1.0, level))
-        self.update()
-
-    def paintEvent(self, event: QtGui.QPaintEvent) -> None:
-        painter = QtGui.QPainter(self)
-        rect = self.rect()
-        painter.fillRect(rect, QtGui.QColor(self._background))
-        fill_width = int(rect.width() * self._level)
-        if fill_width > 0:
-            painter.fillRect(
-                QtCore.QRect(0, 0, fill_width, rect.height()),
-                QtGui.QColor(self._color),
-            )
-
-
-class VolumeControl(QtWidgets.QWidget):
-    def __init__(self, color: str, parent: Optional[QtWidgets.QWidget] = None) -> None:
-        super().__init__(parent)
-        layout = QtWidgets.QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(2)
-        self.slider = ColorSlider(color)
-        self.meter = VUMeterWidget(color)
-        layout.addWidget(self.slider)
-        layout.addWidget(self.meter)
-        self.setMinimumWidth(200)
-
-    def set_level(self, level: float) -> None:
-        self.meter.set_level(level)
+        vu_rect = QtCore.QRectF(
+            margin,
+            rect.height() - vu_height,
+            max(0.0, rect.width() - margin * 2),
+            vu_height,
+        )
+        painter.setPen(QtCore.Qt.PenStyle.NoPen)
+        painter.setBrush(QtGui.QColor(self._track_color))
+        painter.drawRect(vu_rect)
+        if self._vu_level > 0.0:
+            fill_width = vu_rect.width() * self._vu_level
+            painter.setBrush(QtGui.QColor(self._color))
+            painter.drawRect(QtCore.QRectF(vu_rect.left(), vu_rect.top(), fill_width, vu_rect.height()))
 
 
 class MainWindow(QtWidgets.QMainWindow):
@@ -114,7 +100,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._input_path: Optional[Path] = None
         self._stem_audio: Dict[str, np.ndarray] = {}
         self._stem_files: Dict[str, str] = {}
-        self._selected_stem: str = STEMS[0]
+        self._selected_stem: str = STEMS_4[0]
         self._worker: Optional[SeparationWorker] = None
         self._slider_updating = False
 
@@ -137,9 +123,15 @@ class MainWindow(QtWidgets.QMainWindow):
             "piano": self._theme["stem_colors"][5],
         }
 
+        self._stems_panel: Optional[QtWidgets.QFrame] = None
+        self._stems_layout: Optional[QtWidgets.QGridLayout] = None
+        self.stem_controls: Dict[str, Dict[str, QtWidgets.QWidget]] = {}
+
         self._build_ui()
         self._bind_shortcuts()
         self._refresh_devices()
+        self._refresh_output_devices()
+        self._apply_button_styles()
         self._select_stem(self._selected_stem)
         self._update_transport_state(False)
 
@@ -159,9 +151,13 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self.model_combo = QtWidgets.QComboBox()
         self.model_combo.addItems(["htdemucs", "htdemucs_ft", "htdemucs_6s"])
+        self.model_combo.currentTextChanged.connect(self._on_model_changed)
 
         self.device_combo = QtWidgets.QComboBox()
         self.device_combo.currentIndexChanged.connect(self._update_status)
+
+        self.output_combo = QtWidgets.QComboBox()
+        self.output_combo.currentIndexChanged.connect(self._on_output_device_changed)
 
         self.separate_button = QtWidgets.QPushButton("Separate")
         self.separate_button.setEnabled(False)
@@ -176,6 +172,8 @@ class MainWindow(QtWidgets.QMainWindow):
         toolbar_layout.addWidget(self.model_combo)
         toolbar_layout.addWidget(QtWidgets.QLabel("Device:"))
         toolbar_layout.addWidget(self.device_combo)
+        toolbar_layout.addWidget(QtWidgets.QLabel("Output:"))
+        toolbar_layout.addWidget(self.output_combo)
         toolbar_layout.addStretch(1)
         toolbar_layout.addWidget(self.separate_button)
         toolbar_layout.addWidget(self.export_button)
@@ -183,76 +181,24 @@ class MainWindow(QtWidgets.QMainWindow):
         self.waveform = WaveformWidget()
         self.waveform.position_clicked.connect(self._on_waveform_clicked)
 
-        stems_panel = QtWidgets.QFrame()
-        stems_panel.setMinimumHeight(120)
-        stems_layout = QtWidgets.QGridLayout(stems_panel)
-        stems_layout.setContentsMargins(8, 8, 8, 8)
-        stems_layout.setHorizontalSpacing(8)
-        stems_layout.setVerticalSpacing(6)
-        stems_layout.setColumnMinimumWidth(0, 24)
-        stems_layout.setColumnMinimumWidth(1, 20)
-        stems_layout.setColumnMinimumWidth(2, 60)
-        stems_layout.setColumnMinimumWidth(3, 32)
-        stems_layout.setColumnMinimumWidth(4, 32)
-        stems_layout.setColumnStretch(5, 1)
+        self._stems_panel = QtWidgets.QFrame()
+        self._stems_panel.setMinimumHeight(120)
+        self._stems_layout = QtWidgets.QGridLayout(self._stems_panel)
+        self._stems_layout.setContentsMargins(8, 8, 8, 8)
+        self._stems_layout.setHorizontalSpacing(8)
+        self._stems_layout.setVerticalSpacing(6)
+        self._stems_layout.setColumnMinimumWidth(0, 24)
+        self._stems_layout.setColumnMinimumWidth(1, 20)
+        self._stems_layout.setColumnMinimumWidth(2, 60)
+        self._stems_layout.setColumnMinimumWidth(3, 32)
+        self._stems_layout.setColumnMinimumWidth(4, 32)
+        self._stems_layout.setColumnStretch(5, 1)
 
-        self.stem_controls: Dict[str, Dict[str, QtWidgets.QWidget]] = {}
-        for row, stem in enumerate(STEMS):
-            stems_layout.setRowMinimumHeight(row, 40)
-
-            checkbox = QtWidgets.QCheckBox()
-            checkbox.setFixedWidth(24)
-            checkbox.setChecked(True)
-            checkbox.setToolTip("Include this stem in separation")
-            checkbox.stateChanged.connect(self._update_stem_states)
-
-            color = QtWidgets.QLabel()
-            color.setFixedSize(20, 20)
-            color.setStyleSheet(f"background: {self._stem_colors[stem]}; border: 1px solid #000000;")
-
-            name_button = QtWidgets.QToolButton()
-            name_button.setText(stem.capitalize())
-            name_button.setFixedWidth(60)
-            name_button.setToolButtonStyle(QtCore.Qt.ToolButtonStyle.ToolButtonTextOnly)
-            name_button.setStyleSheet("border: none; text-align: left;")
-            name_button.clicked.connect(lambda _, s=stem: self._select_stem(s))
-
-            solo_button = QtWidgets.QToolButton()
-            solo_button.setText("S")
-            solo_button.setFixedWidth(32)
-            solo_button.setCheckable(True)
-            solo_button.setToolTip("Solo this stem (only play this stem)")
-            solo_button.clicked.connect(self._update_stem_states)
-
-            mute_button = QtWidgets.QToolButton()
-            mute_button.setText("M")
-            mute_button.setFixedWidth(32)
-            mute_button.setCheckable(True)
-            mute_button.setToolTip("Mute this stem")
-            mute_button.clicked.connect(self._update_stem_states)
-
-            volume = VolumeControl(self._stem_colors[stem])
-            volume.slider.valueChanged.connect(self._update_stem_states)
-            volume.slider.setToolTip("Volume: 100%")
-
-            stems_layout.addWidget(checkbox, row, 0)
-            stems_layout.addWidget(color, row, 1)
-            stems_layout.addWidget(name_button, row, 2)
-            stems_layout.addWidget(solo_button, row, 3)
-            stems_layout.addWidget(mute_button, row, 4)
-            stems_layout.addWidget(volume, row, 5)
-
-            self.stem_controls[stem] = {
-                "checkbox": checkbox,
-                "solo": solo_button,
-                "mute": mute_button,
-                "volume": volume,
-                "name": name_button,
-            }
+        self._rebuild_stem_controls(self._current_stems_for_model(), preserve_states=False)
 
         splitter = QtWidgets.QSplitter(QtCore.Qt.Orientation.Vertical)
         splitter.addWidget(self.waveform)
-        splitter.addWidget(stems_panel)
+        splitter.addWidget(self._stems_panel)
         splitter.setStretchFactor(0, 3)
         splitter.setStretchFactor(1, 1)
 
@@ -293,9 +239,11 @@ class MainWindow(QtWidgets.QMainWindow):
         self.status_file = QtWidgets.QLabel("No file loaded")
         self.status_info = QtWidgets.QLabel("")
         self.status_device = QtWidgets.QLabel("")
+        self.status_output = QtWidgets.QLabel("")
         status.addWidget(self.status_file, 1)
         status.addWidget(self.status_info)
         status.addWidget(self.status_device)
+        status.addWidget(self.status_output)
         self.setStatusBar(status)
 
     def _bind_shortcuts(self) -> None:
@@ -311,19 +259,122 @@ class MainWindow(QtWidgets.QMainWindow):
         QtGui.QShortcut(QtGui.QKeySequence("S"), self, self._toggle_selected_solo)
         QtGui.QShortcut(QtGui.QKeySequence("M"), self, self._toggle_selected_mute)
 
+    def _current_stems_for_model(self) -> List[str]:
+        if self.model_combo.currentText() == "htdemucs_6s":
+            return list(STEMS_6)
+        return list(STEMS_4)
+
+    def _on_model_changed(self, model: str) -> None:
+        self._rebuild_stem_controls(self._current_stems_for_model(), preserve_states=True)
+
+    def _rebuild_stem_controls(self, stems: List[str], preserve_states: bool = True) -> None:
+        if self._stems_layout is None:
+            return
+
+        previous: Dict[str, Dict[str, object]] = {}
+        if preserve_states:
+            for stem, controls in self.stem_controls.items():
+                volume_slider: VolumeSlider = controls["volume"]  # type: ignore[assignment]
+                previous[stem] = {
+                    "checked": controls["checkbox"].isChecked(),
+                    "solo": controls["solo"].isChecked(),
+                    "mute": controls["mute"].isChecked(),
+                    "volume": float(volume_slider.value()),
+                }
+
+        while self._stems_layout.count():
+            item = self._stems_layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+
+        self.stem_controls = {}
+        for row, stem in enumerate(stems):
+            self._stems_layout.setRowMinimumHeight(row, 40)
+
+            checkbox = QtWidgets.QCheckBox()
+            checkbox.setFixedWidth(24)
+            checkbox.setChecked(bool(previous.get(stem, {}).get("checked", True)))
+            checkbox.setToolTip("Include this stem in separation")
+            checkbox.stateChanged.connect(self._update_stem_states)
+
+            color = QtWidgets.QLabel()
+            color.setFixedSize(20, 20)
+            color.setStyleSheet(f"background: {self._stem_colors[stem]}; border: 1px solid #000000;")
+
+            name_button = QtWidgets.QToolButton()
+            name_button.setText(stem.capitalize())
+            name_button.setFixedWidth(60)
+            name_button.setToolButtonStyle(QtCore.Qt.ToolButtonStyle.ToolButtonTextOnly)
+            name_button.setStyleSheet("border: none; text-align: left;")
+            name_button.clicked.connect(lambda _, s=stem: self._select_stem(s))
+
+            solo_button = QtWidgets.QToolButton()
+            solo_button.setText("S")
+            solo_button.setFixedWidth(32)
+            solo_button.setCheckable(True)
+            solo_button.setChecked(bool(previous.get(stem, {}).get("solo", False)))
+            solo_button.setToolTip("Solo this stem (only play this stem)")
+            solo_button.toggled.connect(lambda checked, s=stem: self._on_solo_toggled(s, checked))
+
+            mute_button = QtWidgets.QToolButton()
+            mute_button.setText("M")
+            mute_button.setFixedWidth(32)
+            mute_button.setCheckable(True)
+            mute_button.setChecked(bool(previous.get(stem, {}).get("mute", False)))
+            mute_button.setToolTip("Mute this stem")
+            mute_button.toggled.connect(lambda checked, s=stem: self._on_mute_toggled(s, checked))
+
+            volume_slider = VolumeSlider(self._stem_colors[stem])
+            volume_slider.setMinimumWidth(200)
+            volume_slider.setValue(int(previous.get(stem, {}).get("volume", 100.0)))
+            volume_slider.valueChanged.connect(self._update_stem_states)
+            volume_slider.setToolTip(f"Volume: {volume_slider.value()}%")
+
+            self._stems_layout.addWidget(checkbox, row, 0)
+            self._stems_layout.addWidget(color, row, 1)
+            self._stems_layout.addWidget(name_button, row, 2)
+            self._stems_layout.addWidget(solo_button, row, 3)
+            self._stems_layout.addWidget(mute_button, row, 4)
+            self._stems_layout.addWidget(volume_slider, row, 5)
+
+            self.stem_controls[stem] = {
+                "checkbox": checkbox,
+                "solo": solo_button,
+                "mute": mute_button,
+                "volume": volume_slider,
+                "name": name_button,
+            }
+
+        if stems:
+            if self._selected_stem not in stems:
+                self._selected_stem = stems[0]
+            self._select_stem(self._selected_stem)
+        else:
+            self._selected_stem = ""
+
+        self._player.prune_stem_states(stems)
+        self._apply_button_styles()
+        self._update_stem_states()
+
     def _toggle_stem_checkbox(self, stem: str) -> None:
-        checkbox = self.stem_controls[stem]["checkbox"]
+        controls = self.stem_controls.get(stem)
+        if not controls:
+            return
+        checkbox = controls["checkbox"]
         checkbox.setChecked(not checkbox.isChecked())
 
     def _toggle_selected_solo(self) -> None:
+        if not self._selected_stem or self._selected_stem not in self.stem_controls:
+            return
         control = self.stem_controls[self._selected_stem]["solo"]
         control.setChecked(not control.isChecked())
-        self._update_stem_states()
 
     def _toggle_selected_mute(self) -> None:
+        if not self._selected_stem or self._selected_stem not in self.stem_controls:
+            return
         control = self.stem_controls[self._selected_stem]["mute"]
         control.setChecked(not control.isChecked())
-        self._update_stem_states()
 
     def _select_stem(self, stem: str) -> None:
         self._selected_stem = stem
@@ -333,12 +384,49 @@ class MainWindow(QtWidgets.QMainWindow):
             font.setBold(name == stem)
             button.setFont(font)
 
+    def _on_solo_toggled(self, stem: str, checked: bool) -> None:
+        controls = self.stem_controls.get(stem)
+        if not controls:
+            return
+        mute_button: QtWidgets.QToolButton = controls["mute"]  # type: ignore[assignment]
+        if checked and mute_button.isChecked():
+            mute_button.blockSignals(True)
+            mute_button.setChecked(False)
+            mute_button.blockSignals(False)
+        self._update_stem_states()
+
+    def _on_mute_toggled(self, stem: str, checked: bool) -> None:
+        controls = self.stem_controls.get(stem)
+        if not controls:
+            return
+        solo_button: QtWidgets.QToolButton = controls["solo"]  # type: ignore[assignment]
+        if checked and solo_button.isChecked():
+            solo_button.blockSignals(True)
+            solo_button.setChecked(False)
+            solo_button.blockSignals(False)
+        self._update_stem_states()
+
     def _refresh_devices(self) -> None:
         self.device_combo.clear()
         devices = get_available_devices()
         for dev in devices:
             label = f"{dev['name']} ({dev['id']})"
             self.device_combo.addItem(label, dev["id"])
+
+    def _refresh_output_devices(self) -> None:
+        self.output_combo.clear()
+        self.output_combo.addItem("Default", None)
+        for index, device in enumerate(sd.query_devices()):
+            if device.get("max_output_channels", 0) > 0:
+                name = device.get("name", f"Output {index}")
+                label = f"{name} ({index})"
+                self.output_combo.addItem(label, index)
+        self._on_output_device_changed()
+
+    def _on_output_device_changed(self) -> None:
+        device_id = self.output_combo.currentData()
+        self._player.set_output_device(device_id)
+        self._update_status()
 
     def _open_file_dialog(self) -> None:
         file_path, _ = QtWidgets.QFileDialog.getOpenFileName(
@@ -377,6 +465,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.status_info.setText(f"{self._sample_rate} Hz | {self._format_time(self._duration)}")
         device_id = self.device_combo.currentData()
         self.status_device.setText(f"Device: {device_id}")
+        output_id = self.output_combo.currentData()
+        self.status_output.setText(f"Output: {output_id if output_id is not None else 'Default'}")
 
     def _start_separation(self) -> None:
         if not self._input_path:
@@ -385,9 +475,19 @@ class MainWindow(QtWidgets.QMainWindow):
         if self._worker and self._worker.isRunning():
             return
 
+        stems = [
+            stem for stem, controls in self.stem_controls.items() if controls["checkbox"].isChecked()
+        ]
+        if not stems:
+            QtWidgets.QMessageBox.warning(
+                self,
+                "No stems selected",
+                "Select at least one stem for separation.",
+            )
+            return
+
         output_dir = self._input_path.parent / f"{self._input_path.stem}_stems"
         output_dir.mkdir(parents=True, exist_ok=True)
-        stems = [stem for stem in STEMS if self.stem_controls[stem]["checkbox"].isChecked()]
         device_id = self.device_combo.currentData() or "auto"
 
         self.progress_bar.setVisible(True)
@@ -427,9 +527,14 @@ class MainWindow(QtWidgets.QMainWindow):
         self._stem_audio = stem_audio
         self._stem_files = stems
         self._player.set_stems(stem_audio)
-        self._update_stem_states()
         self.waveform.set_stem_overlays(stem_audio, self._stem_colors)
-        self.waveform.set_stem_states(self._build_waveform_states())
+
+        available_stems = [stem for stem in STEMS_6 if stem in stem_audio]
+        if available_stems:
+            self._rebuild_stem_controls(available_stems, preserve_states=True)
+        else:
+            self._update_stem_states()
+
         self._update_transport_state(True)
         self._update_status()
 
@@ -462,27 +567,18 @@ class MainWindow(QtWidgets.QMainWindow):
             else:
                 mute_button.setStyleSheet("background: #2a2a2a; color: #888; border: 1px solid #444;")
 
-    def _build_waveform_states(self) -> Dict[str, Dict[str, bool]]:
-        states: Dict[str, Dict[str, bool]] = {}
-        for stem, controls in self.stem_controls.items():
-            states[stem] = {
-                "enabled": controls["checkbox"].isChecked(),
-                "solo": controls["solo"].isChecked(),
-                "mute": controls["mute"].isChecked(),
-            }
-        return states
-
     def _update_stem_states(self) -> None:
+        stem_states: Dict[str, Dict[str, object]] = {}
         for stem, controls in self.stem_controls.items():
-            enabled = controls["checkbox"].isChecked()
             solo = controls["solo"].isChecked()
             mute = controls["mute"].isChecked()
-            volume_widget: VolumeControl = controls["volume"]  # type: ignore[assignment]
-            volume = volume_widget.slider.value() / 100.0
-            volume_widget.slider.setToolTip(f"Volume: {int(volume * 100)}%")
-            self._player.update_stem_state(stem, enabled, solo, mute, volume)
+            volume_slider: VolumeSlider = controls["volume"]  # type: ignore[assignment]
+            volume = volume_slider.value() / 100.0
+            volume_slider.setToolTip(f"Volume: {int(volume * 100)}%")
+            self._player.update_stem_state(stem, solo, mute, volume)
+            stem_states[stem] = {"solo": solo, "mute": mute, "volume": volume}
         self._apply_button_styles()
-        self.waveform.set_stem_states(self._build_waveform_states())
+        self.waveform.set_stem_states(stem_states)
 
     def _toggle_play(self) -> None:
         if self._audio_data is None:
@@ -490,7 +586,9 @@ class MainWindow(QtWidgets.QMainWindow):
         if self._player.is_playing:
             self._stop_playback()
         else:
-            self._player.play()
+            if not self._player.play():
+                self._show_playback_error(self._player.last_error or "Playback failed.")
+                return
             self._position_timer.start()
             self._vu_timer.start()
 
@@ -534,6 +632,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self.time_label.setText(f"{self._format_time(seconds)} / {self._format_time(self._duration)}")
         self.waveform.set_playhead(seconds)
 
+    def _show_playback_error(self, message: str) -> None:
+        self.statusBar().showMessage(f"Playback error: {message}", 8000)
+
     def _update_transport_state(self, enabled: bool) -> None:
         self.play_button.setEnabled(enabled)
         self.stop_button.setEnabled(enabled)
@@ -545,33 +646,46 @@ class MainWindow(QtWidgets.QMainWindow):
         if not self._stem_files:
             QtWidgets.QMessageBox.information(self, "No stems", "Run separation first.")
             return
-        output_dir = QtWidgets.QFileDialog.getExistingDirectory(self, "Select Export Folder")
-        if not output_dir:
+        default_dir = self._input_path.parent if self._input_path else Path.cwd()
+        dialog = ExportDialog(self._stem_files, self._stem_colors, default_dir, self)
+        if dialog.exec() != QtWidgets.QDialog.Accepted:
             return
+
+        output_dir = dialog.output_dir()
+        output_format = dialog.output_format()
+        output_dir.mkdir(parents=True, exist_ok=True)
+
         exported = 0
+        selected = set(dialog.selected_stems())
         for stem, path in self._stem_files.items():
-            controls = self.stem_controls.get(stem)
-            if controls and not controls["checkbox"].isChecked():
+            if stem not in selected:
                 continue
             if not os.path.exists(path):
                 continue
-            target = Path(output_dir) / Path(path).name
-            shutil.copy2(path, target)
+            stem_path = Path(path)
+            extension = ".wav" if output_format == "wav" else ".flac"
+            target = output_dir / f"{stem_path.stem}{extension}"
+            if output_format == "wav" and stem_path.suffix.lower() == ".wav":
+                shutil.copy2(stem_path, target)
+            else:
+                data, sample_rate = sf.read(path, dtype="float32")
+                sf.write(target, data, sample_rate, format=output_format.upper())
             exported += 1
-        QtWidgets.QMessageBox.information(self, "Export complete", f"Exported {exported} stems.")
+
+        self.statusBar().showMessage(f"Exported {exported} stems to {output_dir}", 5000)
 
     def _update_vu_meters(self) -> None:
         if not self._player.is_playing:
             return
         levels = self._player.get_levels()
         for stem, controls in self.stem_controls.items():
-            volume_widget: VolumeControl = controls["volume"]  # type: ignore[assignment]
-            volume_widget.set_level(levels.get(stem, 0.0))
+            volume_slider: VolumeSlider = controls["volume"]  # type: ignore[assignment]
+            volume_slider.set_level(levels.get(stem, 0.0))
 
     def _clear_vu_meters(self) -> None:
         for controls in self.stem_controls.values():
-            volume_widget: VolumeControl = controls["volume"]  # type: ignore[assignment]
-            volume_widget.set_level(0.0)
+            volume_slider: VolumeSlider = controls["volume"]  # type: ignore[assignment]
+            volume_slider.set_level(0.0)
 
     def _format_time(self, seconds: float) -> str:
         minutes = int(seconds) // 60
