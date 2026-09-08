@@ -108,6 +108,10 @@ class MainWindow(QtWidgets.QMainWindow):
         self.separate_button.setEnabled(False)
         self.separate_button.clicked.connect(self._start_separation)
 
+        self.cancel_button = QtWidgets.QPushButton("Cancel")
+        self.cancel_button.setEnabled(False)
+        self.cancel_button.clicked.connect(self._cancel_separation)
+
         self.export_button = QtWidgets.QPushButton("Export")
         self.export_button.setEnabled(False)
         self.export_button.clicked.connect(self._export_stems)
@@ -121,6 +125,7 @@ class MainWindow(QtWidgets.QMainWindow):
         toolbar_layout.addWidget(self.output_combo)
         toolbar_layout.addStretch(1)
         toolbar_layout.addWidget(self.separate_button)
+        toolbar_layout.addWidget(self.cancel_button)
         toolbar_layout.addWidget(self.export_button)
 
         self.waveform = WaveformWidget()
@@ -439,6 +444,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.progress_bar.setFormat("0% - Starting")
 
         self.separate_button.setEnabled(False)
+        self.cancel_button.setEnabled(True)
         self.export_button.setEnabled(False)
 
         self._worker = SeparationWorker(
@@ -451,7 +457,14 @@ class MainWindow(QtWidgets.QMainWindow):
         self._worker.progress_updated.connect(self._on_progress)
         self._worker.finished.connect(self._on_separation_finished)
         self._worker.error.connect(self._on_separation_error)
+        self._worker.cancelled.connect(self._on_separation_cancelled)
         self._worker.start()
+
+    def _cancel_separation(self) -> None:
+        if self._worker and self._worker.isRunning():
+            self.cancel_button.setEnabled(False)
+            self.progress_bar.setFormat("Cancelling…")
+            self._worker.cancel()
 
     def _on_progress(self, percent: float, message: str) -> None:
         self.progress_bar.setValue(int(percent))
@@ -460,6 +473,7 @@ class MainWindow(QtWidgets.QMainWindow):
     def _on_separation_finished(self, stems: Dict[str, str]) -> None:
         self.progress_bar.setVisible(False)
         self.separate_button.setEnabled(True)
+        self.cancel_button.setEnabled(False)
 
         stem_audio: Dict[str, np.ndarray] = {}
         for name, path in stems.items():
@@ -491,7 +505,14 @@ class MainWindow(QtWidgets.QMainWindow):
     def _on_separation_error(self, message: str) -> None:
         self.progress_bar.setVisible(False)
         self.separate_button.setEnabled(True)
+        self.cancel_button.setEnabled(False)
         QtWidgets.QMessageBox.critical(self, "Separation failed", message)
+
+    def _on_separation_cancelled(self) -> None:
+        self.progress_bar.setVisible(False)
+        self.separate_button.setEnabled(bool(self._input_path))
+        self.cancel_button.setEnabled(False)
+        self.statusBar().showMessage("Separation cancelled.", 5000)
 
     def _apply_button_styles(self) -> None:
         for stem, controls in self.stem_controls.items():
@@ -594,7 +615,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self.stop_button.setEnabled(enabled)
         self.position_slider.setEnabled(enabled)
         self.export_button.setEnabled(enabled and bool(self._stem_files))
-        self.separate_button.setEnabled(enabled and not (self._worker and self._worker.isRunning()))
+        running = bool(self._worker and self._worker.isRunning())
+        self.separate_button.setEnabled(enabled and not running)
+        self.cancel_button.setEnabled(enabled and running)
 
     def _export_stems(self) -> None:
         if not self._stem_files:
@@ -645,6 +668,12 @@ class MainWindow(QtWidgets.QMainWindow):
         minutes = int(seconds) // 60
         secs = int(seconds) % 60
         return f"{minutes:02d}:{secs:02d}"
+
+    def closeEvent(self, event: QtGui.QCloseEvent) -> None:
+        if self._worker and self._worker.isRunning():
+            self._worker.cancel()
+            self._worker.waitForFinished(3000)
+        event.accept()
 
     def dragEnterEvent(self, event: QtGui.QDragEnterEvent) -> None:
         if event.mimeData().hasUrls():
