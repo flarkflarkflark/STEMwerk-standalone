@@ -11,6 +11,7 @@ import soundfile as sf
 from PySide6 import QtCore, QtGui, QtWidgets
 
 from stemwerk_core import get_available_devices
+from stemwerk_core.models import AVAILABLE_MODELS
 
 from .export_dialog import ExportDialog
 from .player import Player
@@ -43,6 +44,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._sample_rate: Optional[int] = None
         self._duration: float = 0.0
         self._input_path: Optional[Path] = None
+        self._output_dir: Optional[Path] = None
         self._stem_audio: Dict[str, np.ndarray] = {}
         self._stem_files: Dict[str, str] = {}
         self._selected_stem: str = STEMS_4[0]
@@ -95,7 +97,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.open_button.clicked.connect(self._open_file_dialog)
 
         self.model_combo = QtWidgets.QComboBox()
-        self.model_combo.addItems(["htdemucs", "htdemucs_ft", "htdemucs_6s"])
+        for model_id in AVAILABLE_MODELS:
+            self.model_combo.addItem(model_id, model_id)
         self.model_combo.currentTextChanged.connect(self._on_model_changed)
 
         self.device_combo = QtWidgets.QComboBox()
@@ -103,6 +106,9 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self.output_combo = QtWidgets.QComboBox()
         self.output_combo.currentIndexChanged.connect(self._on_output_device_changed)
+
+        self.output_folder_button = QtWidgets.QPushButton("Stem folder")
+        self.output_folder_button.clicked.connect(self._choose_output_dir)
 
         self.separate_button = QtWidgets.QPushButton("Separate")
         self.separate_button.setEnabled(False)
@@ -121,8 +127,9 @@ class MainWindow(QtWidgets.QMainWindow):
         toolbar_layout.addWidget(self.model_combo)
         toolbar_layout.addWidget(QtWidgets.QLabel("Device:"))
         toolbar_layout.addWidget(self.device_combo)
-        toolbar_layout.addWidget(QtWidgets.QLabel("Output:"))
+        toolbar_layout.addWidget(QtWidgets.QLabel("Audio:"))
         toolbar_layout.addWidget(self.output_combo)
+        toolbar_layout.addWidget(self.output_folder_button)
         toolbar_layout.addStretch(1)
         toolbar_layout.addWidget(self.separate_button)
         toolbar_layout.addWidget(self.cancel_button)
@@ -183,10 +190,12 @@ class MainWindow(QtWidgets.QMainWindow):
         self.status_info = QtWidgets.QLabel("")
         self.status_device = QtWidgets.QLabel("")
         self.status_output = QtWidgets.QLabel("")
+        self.status_folder = QtWidgets.QLabel("")
         status.addWidget(self.status_file, 1)
         status.addWidget(self.status_info)
         status.addWidget(self.status_device)
         status.addWidget(self.status_output)
+        status.addWidget(self.status_folder)
         self.setStatusBar(status)
 
     def _bind_shortcuts(self) -> None:
@@ -203,7 +212,8 @@ class MainWindow(QtWidgets.QMainWindow):
         QtGui.QShortcut(QtGui.QKeySequence("M"), self, self._toggle_selected_mute)
 
     def _current_stems_for_model(self) -> List[str]:
-        if self.model_combo.currentText() == "htdemucs_6s":
+        model = str(self.model_combo.currentData() or self.model_combo.currentText())
+        if model == "htdemucs_6s":
             return list(STEMS_6)
         return list(STEMS_4)
 
@@ -357,6 +367,8 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _refresh_devices(self) -> None:
         self.device_combo.clear()
+        self.device_combo.addItem("Auto", "auto")
+        self.device_combo.addItem("CPU", "cpu")
         devices = get_available_devices()
         for dev in devices:
             label = f"{dev['name']} ({dev['id']})"
@@ -377,6 +389,17 @@ class MainWindow(QtWidgets.QMainWindow):
         self._player.set_output_device(device_id)
         self._update_status()
 
+    def _choose_output_dir(self) -> None:
+        start_dir = str(self._output_dir or (self._input_path.parent if self._input_path else Path.cwd()))
+        selected = QtWidgets.QFileDialog.getExistingDirectory(
+            self,
+            "Choose stem output folder",
+            start_dir,
+        )
+        if selected:
+            self._output_dir = Path(selected)
+            self._update_status()
+
     def _open_file_dialog(self) -> None:
         file_path, _ = QtWidgets.QFileDialog.getOpenFileName(
             self,
@@ -392,6 +415,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._audio_data = data
         self._sample_rate = int(sample_rate)
         self._input_path = path
+        self._output_dir = path.parent / f"{path.stem}_stems"
         self._duration = data.shape[0] / float(sample_rate)
 
         self._player.stop()
@@ -409,13 +433,17 @@ class MainWindow(QtWidgets.QMainWindow):
             self.status_file.setText("No file loaded")
             self.status_info.setText("")
             self.status_device.setText("")
+            self.status_output.setText("")
+            self.status_folder.setText("")
             return
         self.status_file.setText(self._input_path.name)
         self.status_info.setText(f"{self._sample_rate} Hz | {self._format_time(self._duration)}")
         device_id = self.device_combo.currentData()
         self.status_device.setText(f"Device: {device_id}")
         output_id = self.output_combo.currentData()
-        self.status_output.setText(f"Output: {output_id if output_id is not None else 'Default'}")
+        self.status_output.setText(f"Audio: {output_id if output_id is not None else 'Default'}")
+        folder = self._output_dir or (self._input_path.parent / f"{self._input_path.stem}_stems")
+        self.status_folder.setText(f"Stems: {folder.name}")
 
     def _start_separation(self) -> None:
         if not self._input_path:
@@ -435,9 +463,13 @@ class MainWindow(QtWidgets.QMainWindow):
             )
             return
 
-        output_dir = self._input_path.parent / f"{self._input_path.stem}_stems"
+        output_dir = self._output_dir or (
+            self._input_path.parent / f"{self._input_path.stem}_stems"
+        )
         output_dir.mkdir(parents=True, exist_ok=True)
+        self._output_dir = output_dir
         device_id = self.device_combo.currentData() or "auto"
+        model_id = str(self.model_combo.currentData() or self.model_combo.currentText())
 
         self.progress_bar.setVisible(True)
         self.progress_bar.setValue(0)
@@ -450,7 +482,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._worker = SeparationWorker(
             input_file=str(self._input_path),
             output_dir=str(output_dir),
-            model=self.model_combo.currentText(),
+            model=model_id,
             device=str(device_id),
             stems=stems,
         )
