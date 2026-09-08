@@ -22,7 +22,7 @@ stemwerk
 
 ## Architecture overview
 - `main_window.py` handles the UI and user actions.
-- `workers.py` contains QThread workers for separation.
+- `workers.py` launches the isolated `stemwerk.runner` process and consumes JSONL events.
 - `player.py` handles audio playback and stem mixing.
 - `stemwerk-core` performs the actual separation.
 
@@ -32,3 +32,11 @@ stemwerk
 - sounddevice
 - soundfile
 - numpy
+
+
+## Processing boundary
+
+`runner.py` is the headless JSONL process boundary around `stemwerk-core`.
+Do not add model or device implementations here. Keep this repository's
+changes standalone-only; the REAPER repository and shared core remain
+read-only unless a separate task explicitly authorizes changes.
