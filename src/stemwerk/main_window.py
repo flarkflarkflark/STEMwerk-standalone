@@ -10,19 +10,20 @@ import sounddevice as sd
 import soundfile as sf
 from PySide6 import QtCore, QtGui, QtWidgets
 
-from stemwerk_core import get_available_devices
-from stemwerk_core.models import AVAILABLE_MODELS
-
 from .export_dialog import ExportDialog
 from .glossy_button import GlossyButton
 from .logo_widget import LogoWidget
 from .player import Player
+from .runtime import RuntimeCapabilities, RuntimeResolutionError, probe_runtime, resolve_runtime_python, runner_script_path
 from .stem_border import StemBorderWidget
 from .themes import STEM_COLORS, apply_theme, resolve_theme, to_qcolor
 from .vertical_slider import VerticalStemSlider
 from .waveform_widget import WaveformWidget
 from .workers import SeparationWorker
 
+
+_FALLBACK_MODELS = ["htdemucs", "htdemucs_ft", "htdemucs_6s", "hdemucs_mmi"]
+_FALLBACK_QUALITIES = ["fast", "normal", "best"]
 
 STEMS_4 = ["vocals", "drums", "bass", "other"]
 STEMS_6 = ["vocals", "drums", "bass", "other", "guitar", "piano"]
@@ -100,6 +101,11 @@ class MainWindow(QtWidgets.QMainWindow):
         self._stems_layout: Optional[QtWidgets.QHBoxLayout] = None
         self.stem_controls: Dict[str, Dict[str, QtWidgets.QWidget]] = {}
 
+        self._runtime_python: Optional[Path] = None
+        self._runtime_capabilities: Optional[RuntimeCapabilities] = None
+        self._runtime_error: Optional[str] = None
+        self._load_runtime_capabilities()
+
         self._background_widget = GradientWidget()
         self._build_ui()
         self._bind_shortcuts()
@@ -109,6 +115,44 @@ class MainWindow(QtWidgets.QMainWindow):
         self._apply_button_styles()
         self._select_stem(self._selected_stem)
         self._update_transport_state(False)
+        if self._runtime_error:
+            self.statusBar().showMessage(f"Processing runtime unavailable: {self._runtime_error}", 0)
+
+    def _load_runtime_capabilities(self) -> None:
+        """Probe the STEMwerk processing runtime for models/devices/qualities.
+
+        The GUI never imports stemwerk_core itself (see runtime.py) -- this is
+        the only place it learns what the processing runtime actually
+        supports. On failure, fallback metadata lets the interface render,
+        but _start_separation() refuses to launch a separation.
+        """
+        try:
+            python_path = resolve_runtime_python()
+        except RuntimeResolutionError as exc:
+            self._runtime_python = None
+            self._runtime_capabilities = None
+            self._runtime_error = str(exc)
+            return
+
+        result = probe_runtime(python_path)
+        if result.ok and result.capabilities is not None:
+            self._runtime_python = python_path
+            self._runtime_capabilities = result.capabilities
+            self._runtime_error = None
+        else:
+            self._runtime_python = None
+            self._runtime_capabilities = None
+            self._runtime_error = result.error or "Unknown runtime probe failure."
+
+    def _available_models(self) -> List[str]:
+        if self._runtime_capabilities and self._runtime_capabilities.models:
+            return list(self._runtime_capabilities.models)
+        return list(_FALLBACK_MODELS)
+
+    def _available_qualities(self) -> List[str]:
+        if self._runtime_capabilities and self._runtime_capabilities.qualities:
+            return list(self._runtime_capabilities.qualities)
+        return list(_FALLBACK_QUALITIES)
 
     def _build_ui(self) -> None:
         layout = QtWidgets.QVBoxLayout(self._background_widget)
@@ -146,13 +190,18 @@ class MainWindow(QtWidgets.QMainWindow):
         self.open_button.clicked.connect(self._open_file_dialog)
 
         self.model_combo = QtWidgets.QComboBox()
-        for model_id in AVAILABLE_MODELS:
+        for model_id in self._available_models():
             self.model_combo.addItem(model_id, model_id)
         self.model_combo.currentTextChanged.connect(self._on_model_changed)
 
+        qualities = self._available_qualities()
         self.quality_combo = QtWidgets.QComboBox()
-        self.quality_combo.addItems(["Fast", "Normal", "Best"])
-        self.quality_combo.setCurrentText("Normal")
+        for quality_id in qualities:
+            self.quality_combo.addItem(quality_id.capitalize(), quality_id)
+        default_quality = "normal" if "normal" in qualities else qualities[0]
+        default_index = self.quality_combo.findData(default_quality)
+        if default_index >= 0:
+            self.quality_combo.setCurrentIndex(default_index)
 
         self.device_combo = QtWidgets.QComboBox()
         self.device_combo.currentIndexChanged.connect(self._update_status)
@@ -428,12 +477,14 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _refresh_devices(self) -> None:
         self.device_combo.clear()
-        self.device_combo.addItem("Auto", "auto")
-        self.device_combo.addItem("CPU", "cpu")
-        devices = get_available_devices()
+        devices = self._runtime_capabilities.devices if self._runtime_capabilities else []
+        if not devices:
+            devices = [{"id": "auto", "name": "Auto"}, {"id": "cpu", "name": "CPU"}]
         for dev in devices:
-            label = f"{dev['name']} ({dev['id']})"
-            self.device_combo.addItem(label, dev["id"])
+            dev_id = dev.get("id", "")
+            name = dev.get("name", dev_id)
+            label = name if dev_id in ("auto", "cpu") else f"{name} ({dev_id})"
+            self.device_combo.addItem(label, dev_id)
 
     def _refresh_output_devices(self) -> None:
         self.output_combo.clear()
@@ -510,6 +561,13 @@ class MainWindow(QtWidgets.QMainWindow):
         if not self._input_path:
             QtWidgets.QMessageBox.warning(self, "No file", "Please open an audio file first.")
             return
+        if self._runtime_python is None:
+            QtWidgets.QMessageBox.critical(
+                self,
+                "Processing runtime unavailable",
+                self._runtime_error or "No STEMwerk processing runtime is available.",
+            )
+            return
         if self._worker and self._worker.isRunning():
             return
 
@@ -531,7 +589,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._output_dir = output_dir
         device_id = self.device_combo.currentData() or "auto"
         model_id = str(self.model_combo.currentData() or self.model_combo.currentText())
-        quality = self.quality_combo.currentText().lower()
+        quality = str(self.quality_combo.currentData() or self.quality_combo.currentText().lower())
 
         self.progress_bar.setVisible(True)
         self.progress_bar.setValue(0)
@@ -548,6 +606,8 @@ class MainWindow(QtWidgets.QMainWindow):
             device=str(device_id),
             quality=quality,
             stems=stems,
+            runtime_python=self._runtime_python,
+            runner_script=runner_script_path(),
         )
         self._worker.progress_updated.connect(self._on_progress)
         self._worker.finished.connect(self._on_separation_finished)
@@ -744,7 +804,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.position_slider.setEnabled(enabled)
         self.export_button.setEnabled(enabled and bool(self._stem_files))
         running = bool(self._worker and self._worker.isRunning())
-        self.separate_button.setEnabled(enabled and not running)
+        can_separate = enabled and not running and self._runtime_python is not None
+        self.separate_button.setEnabled(can_separate)
         self.cancel_button.setEnabled(enabled and running)
 
     def _export_stems(self) -> None:

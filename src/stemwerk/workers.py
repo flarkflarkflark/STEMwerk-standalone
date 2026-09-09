@@ -1,15 +1,22 @@
 from __future__ import annotations
 
 import json
-import sys
 from pathlib import Path
 from typing import Dict, List, Optional
 
 from PySide6 import QtCore
 
+from .runtime import resolve_runtime_python, runner_script_path
+
 
 class SeparationWorker(QtCore.QObject):
-    """Run separation outside the Qt process and consume JSONL events."""
+    """Run separation outside the Qt process and consume JSONL events.
+
+    Separation runs under the STEMwerk processing runtime, not the GUI's own
+    interpreter: the GUI process stays free of stemwerk_core/PyTorch, and the
+    processing runtime never needs the `stemwerk` package installed since the
+    runner script is invoked by path, not by `-m stemwerk.runner`.
+    """
 
     progress_updated = QtCore.Signal(float, str)
     finished = QtCore.Signal(dict)
@@ -24,6 +31,8 @@ class SeparationWorker(QtCore.QObject):
         device: str,
         quality: str = "normal",
         stems: Optional[List[str]] = None,
+        runtime_python: Optional[Path] = None,
+        runner_script: Optional[Path] = None,
     ) -> None:
         super().__init__()
         self._input_file = input_file
@@ -32,6 +41,8 @@ class SeparationWorker(QtCore.QObject):
         self._device = device
         self._quality = quality
         self._stems = stems or []
+        self._runtime_python = Path(runtime_python) if runtime_python is not None else resolve_runtime_python()
+        self._runner_script = Path(runner_script) if runner_script is not None else runner_script_path()
         self._cancel_requested = False
         self._completed_payload: Optional[Dict[str, object]] = None
         self._protocol_buffer = ""
@@ -48,8 +59,7 @@ class SeparationWorker(QtCore.QObject):
 
     def start(self) -> None:
         arguments = [
-            "-m",
-            "stemwerk.runner",
+            str(self._runner_script),
             "--input",
             self._input_file,
             "--output-dir",
@@ -63,7 +73,7 @@ class SeparationWorker(QtCore.QObject):
         ]
         for stem in self._stems:
             arguments.extend(["--stem", stem])
-        self._process.start(sys.executable, arguments)
+        self._process.start(str(self._runtime_python), arguments)
 
     def isRunning(self) -> bool:
         return self._process.state() != QtCore.QProcess.ProcessState.NotRunning

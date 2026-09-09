@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import sys
-from typing import List
+from pathlib import Path
+from typing import List, Tuple
 
 import pytest
 
@@ -23,13 +24,19 @@ def _make_worker(tmp_path, **overrides):
         model="htdemucs",
         device="cpu",
         stems=["vocals"],
+        # Unit tests never actually launch a process, but SeparationWorker's
+        # constructor would otherwise call resolve_runtime_python(), which
+        # depends on what runtime happens to be installed on the machine
+        # running the tests. Inject fixed, machine-independent paths instead.
+        runtime_python=Path(sys.executable),
+        runner_script=Path("/fake/stemwerk/runner.py"),
     )
     kwargs.update(overrides)
     return SeparationWorker(**kwargs)
 
 
 def test_start_builds_expected_process_arguments(qapp, tmp_path, monkeypatch) -> None:
-    captured: List[List[str]] = []
+    captured: List[Tuple[str, List[str]]] = []
 
     worker = _make_worker(
         tmp_path,
@@ -40,19 +47,38 @@ def test_start_builds_expected_process_arguments(qapp, tmp_path, monkeypatch) ->
     monkeypatch.setattr(
         worker._process,
         "start",
-        lambda program, arguments: captured.append(list(arguments)),
+        lambda program, arguments: captured.append((program, list(arguments))),
     )
 
     worker.start()
 
     assert len(captured) == 1
-    arguments = captured[0]
-    assert arguments[:2] == ["-m", "stemwerk.runner"]
+    program, arguments = captured[0]
+    assert program == str(Path(sys.executable))
+    assert arguments[0] == "/fake/stemwerk/runner.py"
     assert "--model" in arguments and arguments[arguments.index("--model") + 1] == "htdemucs_6s"
     assert "--quality" in arguments and arguments[arguments.index("--quality") + 1] == "best"
     assert arguments.count("--stem") == 2
     assert "vocals" in arguments
     assert "drums" in arguments
+
+
+def test_start_uses_given_runtime_python_not_sys_executable(qapp, tmp_path, monkeypatch) -> None:
+    captured: List[Tuple[str, List[str]]] = []
+
+    other_python = tmp_path / "other-python"
+    worker = _make_worker(tmp_path, runtime_python=other_python)
+    monkeypatch.setattr(
+        worker._process,
+        "start",
+        lambda program, arguments: captured.append((program, list(arguments))),
+    )
+
+    worker.start()
+
+    program, _ = captured[0]
+    assert program == str(other_python)
+    assert program != sys.executable
 
 
 def test_start_defaults_quality_to_normal(qapp, tmp_path, monkeypatch) -> None:
