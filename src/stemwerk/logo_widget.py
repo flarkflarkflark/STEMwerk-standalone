@@ -26,6 +26,11 @@ class LogoWidget(QtWidgets.QWidget):
         self._text_color = QtGui.QColor(text_color)
         self.update()
 
+    def sizeHint(self) -> QtCore.QSize:
+        metrics = QtGui.QFontMetrics(QtGui.QFont("Arial", 24, QtGui.QFont.Weight.Bold))
+        width = sum(metrics.horizontalAdvance(letter) for letter in self._letters)
+        return QtCore.QSize(width, 40)
+
     def paintEvent(self, event: QtGui.QPaintEvent) -> None:
         painter = QtGui.QPainter(self)
         painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing, True)
