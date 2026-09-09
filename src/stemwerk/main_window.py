@@ -150,6 +150,10 @@ class MainWindow(QtWidgets.QMainWindow):
             self.model_combo.addItem(model_id, model_id)
         self.model_combo.currentTextChanged.connect(self._on_model_changed)
 
+        self.quality_combo = QtWidgets.QComboBox()
+        self.quality_combo.addItems(["Fast", "Normal", "Best"])
+        self.quality_combo.setCurrentText("Normal")
+
         self.device_combo = QtWidgets.QComboBox()
         self.device_combo.currentIndexChanged.connect(self._update_status)
 
@@ -174,6 +178,8 @@ class MainWindow(QtWidgets.QMainWindow):
         toolbar_layout.addWidget(self.open_button)
         toolbar_layout.addWidget(QtWidgets.QLabel("Model:"))
         toolbar_layout.addWidget(self.model_combo)
+        toolbar_layout.addWidget(QtWidgets.QLabel("Quality:"))
+        toolbar_layout.addWidget(self.quality_combo)
         toolbar_layout.addWidget(QtWidgets.QLabel("Device:"))
         toolbar_layout.addWidget(self.device_combo)
         toolbar_layout.addWidget(QtWidgets.QLabel("Audio:"))
@@ -525,6 +531,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._output_dir = output_dir
         device_id = self.device_combo.currentData() or "auto"
         model_id = str(self.model_combo.currentData() or self.model_combo.currentText())
+        quality = self.quality_combo.currentText().lower()
 
         self.progress_bar.setVisible(True)
         self.progress_bar.setValue(0)
@@ -539,6 +546,7 @@ class MainWindow(QtWidgets.QMainWindow):
             output_dir=str(output_dir),
             model=model_id,
             device=str(device_id),
+            quality=quality,
             stems=stems,
         )
         self._worker.progress_updated.connect(self._on_progress)

@@ -22,6 +22,7 @@ class SeparationWorker(QtCore.QObject):
         output_dir: str,
         model: str,
         device: str,
+        quality: str = "normal",
         stems: Optional[List[str]] = None,
     ) -> None:
         super().__init__()
@@ -29,6 +30,7 @@ class SeparationWorker(QtCore.QObject):
         self._output_dir = output_dir
         self._model = model
         self._device = device
+        self._quality = quality
         self._stems = stems or []
         self._cancel_requested = False
         self._completed_payload: Optional[Dict[str, object]] = None
@@ -56,6 +58,8 @@ class SeparationWorker(QtCore.QObject):
             self._model,
             "--device",
             self._device,
+            "--quality",
+            self._quality,
         ]
         for stem in self._stems:
             arguments.extend(["--stem", stem])

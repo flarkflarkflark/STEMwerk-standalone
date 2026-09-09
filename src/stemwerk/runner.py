@@ -24,6 +24,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output-dir", required=True, type=Path)
     parser.add_argument("--model", default="htdemucs")
     parser.add_argument("--device", default="auto")
+    parser.add_argument("--quality", default="normal")
     parser.add_argument("--stem", action="append", dest="stems")
     return parser
 
@@ -33,6 +34,7 @@ def run(
     output_dir: Path,
     model: str,
     device: str,
+    quality: str,
     stems: Optional[Iterable[str]],
 ) -> int:
     # Keep the protocol stream machine-readable. Backend/library chatter is
@@ -53,8 +55,8 @@ def run(
         )
         protocol_stdout.flush()
 
-    emit_event("started", input=str(input_file), model=model, device=device)
-    separator = StemSeparator(model=model, device=device)
+    emit_event("started", input=str(input_file), model=model, device=device, quality=quality)
+    separator = StemSeparator(model=model, device=device, quality=quality)
     separator.on_progress = progress
 
     try:
@@ -70,6 +72,7 @@ def run(
             message=str(exc),
             error_type=type(exc).__name__,
             traceback="".join(traceback.format_exception(exc)),
+            quality=quality,
         )
         return 1
 
@@ -89,6 +92,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         output_dir=args.output_dir,
         model=args.model,
         device=args.device,
+        quality=args.quality,
         stems=args.stems,
     )
 
