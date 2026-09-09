@@ -6,7 +6,6 @@ from PySide6 import QtWidgets
 from PySide6.QtGui import QColor, QPalette
 
 from .main_window import MainWindow
-from .themes import apply_theme
 
 
 def _apply_dark_fusion_palette(app: QtWidgets.QApplication) -> None:
@@ -29,7 +28,6 @@ def _apply_dark_fusion_palette(app: QtWidgets.QApplication) -> None:
 def main() -> int:
     app = QtWidgets.QApplication(sys.argv)
     _apply_dark_fusion_palette(app)
-    apply_theme(app, "classic")
 
     window = MainWindow()
     window.show()

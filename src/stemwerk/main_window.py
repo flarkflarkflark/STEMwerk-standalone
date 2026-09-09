@@ -14,8 +14,11 @@ from stemwerk_core import get_available_devices
 from stemwerk_core.models import AVAILABLE_MODELS
 
 from .export_dialog import ExportDialog
+from .glossy_button import GlossyButton
+from .logo_widget import LogoWidget
 from .player import Player
-from .themes import THEMES
+from .stem_border import StemBorderWidget
+from .themes import STEM_COLORS, apply_theme, resolve_theme, to_qcolor
 from .vertical_slider import VerticalStemSlider
 from .waveform_widget import WaveformWidget
 from .workers import SeparationWorker
@@ -31,6 +34,26 @@ STEM_LABELS = {
     "guitar": "GTR",
     "piano": "PNO",
 }
+THEME_ORDER = ["classic", "ember", "ice", "mono"]
+
+
+class GradientWidget(QtWidgets.QWidget):
+    def __init__(self, parent: Optional[QtWidgets.QWidget] = None) -> None:
+        super().__init__(parent)
+        self._top = QtGui.QColor("#1a1a1e")
+        self._bottom = QtGui.QColor("#2e2e34")
+
+    def set_colors(self, top: QtGui.QColor, bottom: QtGui.QColor) -> None:
+        self._top = QtGui.QColor(top)
+        self._bottom = QtGui.QColor(bottom)
+        self.update()
+
+    def paintEvent(self, event: QtGui.QPaintEvent) -> None:
+        painter = QtGui.QPainter(self)
+        gradient = QtGui.QLinearGradient(0, 0, 0, self.height())
+        gradient.setColorAt(0.0, self._top)
+        gradient.setColorAt(1.0, self._bottom)
+        painter.fillRect(self.rect(), gradient)
 
 
 class MainWindow(QtWidgets.QMainWindow):
@@ -60,40 +83,66 @@ class MainWindow(QtWidgets.QMainWindow):
         self._vu_timer.setInterval(33)
         self._vu_timer.timeout.connect(self._update_vu_meters)
 
-        self._theme = THEMES["classic"]
+        self._theme_name = "classic"
+        self._theme_mode = "dark"
+        self._theme = resolve_theme(self._theme_name, self._theme_mode)
+        self._theme_colors = {key: to_qcolor(value) for key, value in self._theme.items()}
         self._stem_colors = {
-            "vocals": self._theme["stem_colors"][0],
-            "drums": self._theme["stem_colors"][1],
-            "bass": self._theme["stem_colors"][2],
-            "other": self._theme["stem_colors"][3],
-            "guitar": self._theme["stem_colors"][4],
-            "piano": self._theme["stem_colors"][5],
+            "vocals": STEM_COLORS[0],
+            "drums": STEM_COLORS[1],
+            "bass": STEM_COLORS[2],
+            "other": STEM_COLORS[3],
+            "guitar": STEM_COLORS[4],
+            "piano": STEM_COLORS[5],
         }
 
         self._stems_panel: Optional[QtWidgets.QFrame] = None
         self._stems_layout: Optional[QtWidgets.QHBoxLayout] = None
         self.stem_controls: Dict[str, Dict[str, QtWidgets.QWidget]] = {}
 
+        self._background_widget = GradientWidget()
         self._build_ui()
         self._bind_shortcuts()
         self._refresh_devices()
         self._refresh_output_devices()
+        self._apply_theme()
         self._apply_button_styles()
         self._select_stem(self._selected_stem)
         self._update_transport_state(False)
 
     def _build_ui(self) -> None:
-        central = QtWidgets.QWidget()
-        layout = QtWidgets.QVBoxLayout(central)
+        layout = QtWidgets.QVBoxLayout(self._background_widget)
         layout.setContentsMargins(12, 12, 12, 12)
-        layout.setSpacing(10)
+        layout.setSpacing(8)
+
+        self.stem_border = StemBorderWidget(STEM_COLORS[:4])
+
+        header = QtWidgets.QWidget()
+        header_layout = QtWidgets.QHBoxLayout(header)
+        header_layout.setContentsMargins(0, 0, 0, 0)
+        header_layout.setSpacing(8)
+        header.setFixedHeight(40)
+
+        self.logo_widget = LogoWidget()
+        self.logo_widget.setSizePolicy(QtWidgets.QSizePolicy.Policy.Expanding, QtWidgets.QSizePolicy.Policy.Fixed)
+
+        self.theme_button = GlossyButton("??")
+        self.theme_button.setFixedSize(30, 30)
+        self.theme_button.clicked.connect(self._cycle_theme)
+        self.theme_button.setContextMenuPolicy(QtCore.Qt.ContextMenuPolicy.CustomContextMenu)
+        self.theme_button.customContextMenuRequested.connect(lambda _: self._toggle_theme_mode())
+
+        header_layout.addStretch(1)
+        header_layout.addWidget(self.logo_widget, 0, QtCore.Qt.AlignmentFlag.AlignCenter)
+        header_layout.addStretch(1)
+        header_layout.addWidget(self.theme_button, 0, QtCore.Qt.AlignmentFlag.AlignRight)
 
         toolbar = QtWidgets.QFrame()
         toolbar_layout = QtWidgets.QHBoxLayout(toolbar)
         toolbar_layout.setContentsMargins(8, 8, 8, 8)
         toolbar_layout.setSpacing(8)
 
-        self.open_button = QtWidgets.QPushButton("Open File")
+        self.open_button = GlossyButton("Open File")
         self.open_button.clicked.connect(self._open_file_dialog)
 
         self.model_combo = QtWidgets.QComboBox()
@@ -107,18 +156,18 @@ class MainWindow(QtWidgets.QMainWindow):
         self.output_combo = QtWidgets.QComboBox()
         self.output_combo.currentIndexChanged.connect(self._on_output_device_changed)
 
-        self.output_folder_button = QtWidgets.QPushButton("Stem folder")
+        self.output_folder_button = GlossyButton("Stem folder")
         self.output_folder_button.clicked.connect(self._choose_output_dir)
 
-        self.separate_button = QtWidgets.QPushButton("Separate")
+        self.separate_button = GlossyButton("Separate")
         self.separate_button.setEnabled(False)
         self.separate_button.clicked.connect(self._start_separation)
 
-        self.cancel_button = QtWidgets.QPushButton("Cancel")
+        self.cancel_button = GlossyButton("Cancel")
         self.cancel_button.setEnabled(False)
         self.cancel_button.clicked.connect(self._cancel_separation)
 
-        self.export_button = QtWidgets.QPushButton("Export")
+        self.export_button = GlossyButton("Export")
         self.export_button.setEnabled(False)
         self.export_button.clicked.connect(self._export_stems)
 
@@ -157,9 +206,9 @@ class MainWindow(QtWidgets.QMainWindow):
         transport_layout.setContentsMargins(8, 8, 8, 8)
         transport_layout.setSpacing(8)
 
-        self.play_button = QtWidgets.QPushButton("Play")
+        self.play_button = GlossyButton("Play")
         self.play_button.clicked.connect(self._toggle_play)
-        self.stop_button = QtWidgets.QPushButton("Stop")
+        self.stop_button = GlossyButton("Stop")
         self.stop_button.clicked.connect(self._stop_playback)
 
         self.position_slider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
@@ -178,12 +227,14 @@ class MainWindow(QtWidgets.QMainWindow):
         self.progress_bar.setVisible(False)
         self.progress_bar.setRange(0, 100)
 
+        layout.addWidget(self.stem_border)
+        layout.addWidget(header)
         layout.addWidget(toolbar)
         layout.addWidget(splitter, 1)
         layout.addWidget(transport)
         layout.addWidget(self.progress_bar)
 
-        self.setCentralWidget(central)
+        self.setCentralWidget(self._background_widget)
 
         status = QtWidgets.QStatusBar()
         self.status_file = QtWidgets.QLabel("No file loaded")
@@ -219,6 +270,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _on_model_changed(self, model: str) -> None:
         self._rebuild_stem_controls(self._current_stems_for_model(), preserve_states=True)
+        self._update_stem_border()
 
     def _rebuild_stem_controls(self, stems: List[str], preserve_states: bool = True) -> None:
         if self._stems_layout is None:
@@ -249,32 +301,30 @@ class MainWindow(QtWidgets.QMainWindow):
             column_layout.setSpacing(6)
             column_layout.setAlignment(QtCore.Qt.AlignmentFlag.AlignTop)
 
-            label = QtWidgets.QToolButton()
-            label.setText(STEM_LABELS.get(stem, stem[:3].upper()))
-            label.setToolButtonStyle(QtCore.Qt.ToolButtonStyle.ToolButtonTextOnly)
-            label.setAutoRaise(True)
+            label = QtWidgets.QLabel(STEM_LABELS.get(stem, stem[:3].upper()))
+            label.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
             label.setFixedHeight(22)
-            label.setStyleSheet(f"color: {self._stem_colors[stem]}; border: none; font-weight: 600;")
-            label.clicked.connect(lambda _, s=stem: self._select_stem(s))
+            label.setStyleSheet(f"color: {self._stem_colors[stem]}; font-weight: 600;")
+            label.mousePressEvent = lambda event, s=stem: self._select_stem(s)  # type: ignore[assignment]
 
             buttons_row = QtWidgets.QHBoxLayout()
             buttons_row.setSpacing(4)
             buttons_row.setContentsMargins(0, 0, 0, 0)
 
-            solo_button = QtWidgets.QToolButton()
-            solo_button.setText("S")
-            solo_button.setFixedSize(24, 24)
+            solo_button = GlossyButton("S")
             solo_button.setCheckable(True)
+            solo_button.setFixedSize(28, 28)
             solo_button.setChecked(bool(previous.get(stem, {}).get("solo", False)))
             solo_button.setToolTip("Solo this stem (only play this stem)")
+            solo_button.setFont(QtGui.QFont("Arial", 11, QtGui.QFont.Weight.Bold))
             solo_button.toggled.connect(lambda checked, s=stem: self._on_solo_toggled(s, checked))
 
-            mute_button = QtWidgets.QToolButton()
-            mute_button.setText("M")
-            mute_button.setFixedSize(24, 24)
+            mute_button = GlossyButton("M")
             mute_button.setCheckable(True)
+            mute_button.setFixedSize(28, 28)
             mute_button.setChecked(bool(previous.get(stem, {}).get("mute", False)))
             mute_button.setToolTip("Mute this stem")
+            mute_button.setFont(QtGui.QFont("Arial", 11, QtGui.QFont.Weight.Bold))
             mute_button.toggled.connect(lambda checked, s=stem: self._on_mute_toggled(s, checked))
 
             buttons_row.addWidget(solo_button)
@@ -290,7 +340,7 @@ class MainWindow(QtWidgets.QMainWindow):
             slider.valueChanged.connect(self._update_waveform_state)
             slider.setToolTip(f"Volume: {slider.value()}%")
 
-            column_layout.addWidget(label, alignment=QtCore.Qt.AlignmentFlag.AlignHCenter)
+            column_layout.addWidget(label)
             column_layout.addLayout(buttons_row)
             column_layout.addWidget(checkbox, alignment=QtCore.Qt.AlignmentFlag.AlignHCenter)
             column_layout.addWidget(slider, 1)
@@ -315,6 +365,11 @@ class MainWindow(QtWidgets.QMainWindow):
         self._player.prune_stem_states(stems)
         self._apply_button_styles()
         self._update_waveform_state()
+        self._update_stem_border()
+
+    def _update_stem_border(self) -> None:
+        count = 6 if self.model_combo.currentText() == "htdemucs_6s" else 4
+        self.stem_border.set_colors(STEM_COLORS[:count])
 
     def _toggle_stem_checkbox(self, stem: str) -> None:
         controls = self.stem_controls.get(stem)
@@ -338,16 +393,16 @@ class MainWindow(QtWidgets.QMainWindow):
     def _select_stem(self, stem: str) -> None:
         self._selected_stem = stem
         for name, controls in self.stem_controls.items():
-            button = controls["name"]
-            font = button.font()
+            label: QtWidgets.QLabel = controls["name"]  # type: ignore[assignment]
+            font = label.font()
             font.setBold(name == stem)
-            button.setFont(font)
+            label.setFont(font)
 
     def _on_solo_toggled(self, stem: str, checked: bool) -> None:
         controls = self.stem_controls.get(stem)
         if not controls:
             return
-        mute_button: QtWidgets.QToolButton = controls["mute"]  # type: ignore[assignment]
+        mute_button: GlossyButton = controls["mute"]  # type: ignore[assignment]
         if checked and mute_button.isChecked():
             mute_button.blockSignals(True)
             mute_button.setChecked(False)
@@ -358,7 +413,7 @@ class MainWindow(QtWidgets.QMainWindow):
         controls = self.stem_controls.get(stem)
         if not controls:
             return
-        solo_button: QtWidgets.QToolButton = controls["solo"]  # type: ignore[assignment]
+        solo_button: GlossyButton = controls["solo"]  # type: ignore[assignment]
         if checked and solo_button.isChecked():
             solo_button.blockSignals(True)
             solo_button.setChecked(False)
@@ -547,22 +602,55 @@ class MainWindow(QtWidgets.QMainWindow):
         self.statusBar().showMessage("Separation cancelled.", 5000)
 
     def _apply_button_styles(self) -> None:
+        accent = self._theme_colors["accent"].name()
+        primary = self._theme_colors["buttonPrimary"].name()
+        dim_text = "#cccccc"
+
+        if hasattr(self, "open_button"):
+            self.open_button.set_base_color(accent)
+            self.open_button.set_text_color("#ffffff")
+        if hasattr(self, "separate_button"):
+            self.separate_button.set_base_color(accent)
+            self.separate_button.set_text_color("#ffffff")
+        if hasattr(self, "cancel_button"):
+            self.cancel_button.set_base_color("#cc3333")
+            self.cancel_button.set_text_color("#ffffff")
+        if hasattr(self, "export_button"):
+            self.export_button.set_base_color(accent)
+            self.export_button.set_text_color("#ffffff")
+        if hasattr(self, "output_folder_button"):
+            self.output_folder_button.set_base_color(primary)
+            self.output_folder_button.set_text_color("#ffffff")
+
+        if hasattr(self, "play_button"):
+            self.play_button.set_base_color(primary)
+            self.play_button.set_text_color("#ffffff")
+        if hasattr(self, "stop_button"):
+            self.stop_button.set_base_color(primary)
+            self.stop_button.set_text_color("#ffffff")
+
+        if hasattr(self, "theme_button"):
+            self.theme_button.set_base_color(accent)
+            self.theme_button.set_text_color("#ffffff")
+
         for stem, controls in self.stem_controls.items():
-            solo_button: QtWidgets.QToolButton = controls["solo"]  # type: ignore[assignment]
-            mute_button: QtWidgets.QToolButton = controls["mute"]  # type: ignore[assignment]
+            solo_button: GlossyButton = controls["solo"]  # type: ignore[assignment]
+            mute_button: GlossyButton = controls["mute"]  # type: ignore[assignment]
             color = self._stem_colors.get(stem, "#ffffff")
 
             if solo_button.isChecked():
-                solo_button.setStyleSheet(
-                    f"background: {color}; color: #ffffff; border: 1px solid #dddddd;"
-                )
+                solo_button.set_base_color(color)
+                solo_button.set_text_color("#ffffff")
             else:
-                solo_button.setStyleSheet("background: #2a2a2a; color: #888; border: 1px solid #444;")
+                solo_button.set_base_color("#2a2a2a")
+                solo_button.set_text_color(dim_text)
 
             if mute_button.isChecked():
-                mute_button.setStyleSheet("background: #cc3333; color: #ffffff; border: 1px solid #aa2222;")
+                mute_button.set_base_color("#cc3333")
+                mute_button.set_text_color("#ffffff")
             else:
-                mute_button.setStyleSheet("background: #2a2a2a; color: #888; border: 1px solid #444;")
+                mute_button.set_base_color("#2a2a2a")
+                mute_button.set_text_color(dim_text)
 
     def _update_stem_states(self) -> None:
         for stem, controls in self.stem_controls.items():
@@ -695,6 +783,43 @@ class MainWindow(QtWidgets.QMainWindow):
         for controls in self.stem_controls.values():
             volume_slider: VerticalStemSlider = controls["volume"]  # type: ignore[assignment]
             volume_slider.set_vu_level(0.0)
+
+    def _cycle_theme(self) -> None:
+        current_index = THEME_ORDER.index(self._theme_name)
+        self._theme_name = THEME_ORDER[(current_index + 1) % len(THEME_ORDER)]
+        self._apply_theme()
+
+    def _toggle_theme_mode(self) -> None:
+        self._theme_mode = "light" if self._theme_mode == "dark" else "dark"
+        self._apply_theme()
+
+    def _apply_theme(self) -> None:
+        self._theme = resolve_theme(self._theme_name, self._theme_mode)
+        self._theme_colors = {key: to_qcolor(value) for key, value in self._theme.items()}
+        apply_theme(QtWidgets.QApplication.instance(), self._theme)
+
+        self._update_theme_tooltip()
+        self.logo_widget.set_colors(STEM_COLORS[:4], self._theme_colors["text"])
+        self._background_widget.set_colors(
+            self._theme_colors["bgGradientTop"],
+            self._theme_colors["bgGradientBottom"],
+        )
+        self.waveform.set_theme(
+            background=self._theme_colors["bgGradientTop"],
+            border=self._theme_colors["border"],
+            grid=self._theme_colors["textDim"],
+            accent=self._theme_colors["accent"],
+            text=self._theme_colors["text"],
+        )
+        for stem, controls in self.stem_controls.items():
+            slider: VerticalStemSlider = controls["volume"]  # type: ignore[assignment]
+            slider.set_color(self._stem_colors.get(stem, "#ffffff"))
+        self._apply_button_styles()
+        self.update()
+
+    def _update_theme_tooltip(self) -> None:
+        label = self._theme_name.capitalize()
+        self.theme_button.setToolTip(f"Theme: {label} (click to cycle, right-click for light/dark)")
 
     def _format_time(self, seconds: float) -> str:
         minutes = int(seconds) // 60

@@ -1,117 +1,186 @@
 from __future__ import annotations
 
-from typing import Dict, List
+from typing import Dict, Tuple
 
 from PySide6 import QtWidgets
 from PySide6.QtGui import QColor, QPalette
 
-Theme = Dict[str, object]
+ColorTuple = Tuple[float, float, float]
+ThemeVariant = Dict[str, ColorTuple]
 
-THEMES: Dict[str, Theme] = {
+STEM_COLORS = ["#FF6464", "#64C8FF", "#9664FF", "#64FF96", "#FFB464", "#FF78C8"]
+
+THEMES: Dict[str, Dict[str, ThemeVariant]] = {
     "classic": {
-        "bg": "#1a1a2e",
-        "panel": "#22223b",
-        "accent": "#ff7a18",
-        "text": "#f5f5f5",
-        "text_dim": "#b0b0b0",
-        "border": "#2f2f4a",
-        "stem_colors": ["#ff6b6b", "#f4d35e", "#6bcB77", "#4d96ff", "#ff9f1c", "#9c89b8"],
+        "dark": {
+            "bg": (0.18, 0.18, 0.20),
+            "bgGradientTop": (0.10, 0.10, 0.12),
+            "bgGradientBottom": (0.18, 0.18, 0.20),
+            "inputBg": (0.12, 0.12, 0.14),
+            "text": (1.0, 1.0, 1.0),
+            "textDim": (0.7, 0.7, 0.7),
+            "accent": (0.3, 0.5, 0.8),
+            "accentHover": (0.4, 0.6, 0.9),
+            "button": (0.2, 0.4, 0.7),
+            "buttonHover": (0.3, 0.5, 0.8),
+            "buttonPrimary": (0.2, 0.5, 0.3),
+            "buttonPrimaryHover": (0.3, 0.6, 0.4),
+            "border": (0.6, 0.6, 0.6),
+        },
+        "light": {
+            "bg": (0.92, 0.92, 0.94),
+            "bgGradientTop": (0.96, 0.96, 0.98),
+            "bgGradientBottom": (0.88, 0.88, 0.90),
+            "inputBg": (0.85, 0.85, 0.87),
+            "text": (0.1, 0.1, 0.1),
+            "textDim": (0.3, 0.3, 0.3),
+            "accent": (0.2, 0.4, 0.7),
+            "accentHover": (0.3, 0.5, 0.8),
+            "button": (0.3, 0.5, 0.75),
+            "buttonHover": (0.4, 0.6, 0.85),
+            "buttonPrimary": (0.25, 0.55, 0.35),
+            "buttonPrimaryHover": (0.35, 0.65, 0.45),
+            "border": (0.4, 0.4, 0.4),
+        },
     },
     "ember": {
-        "bg": "#2d1b00",
-        "panel": "#3a2400",
-        "accent": "#ff9f1c",
-        "text": "#fff1d6",
-        "text_dim": "#c7b08b",
-        "border": "#4a2f00",
-        "stem_colors": ["#ff6b35", "#ffb703", "#f25f5c", "#ffa552", "#f77f00", "#d62828"],
+        "dark": {
+            "accent": (0.75, 0.35, 0.25),
+            "accentHover": (0.85, 0.45, 0.35),
+            "button": (0.55, 0.25, 0.2),
+            "buttonHover": (0.65, 0.35, 0.3),
+            "buttonPrimary": (0.5, 0.35, 0.2),
+            "buttonPrimaryHover": (0.6, 0.45, 0.3),
+            "bgGradientTop": (0.11, 0.09, 0.08),
+            "bgGradientBottom": (0.18, 0.14, 0.12),
+        },
+        "light": {
+            "accent": (0.75, 0.35, 0.25),
+            "accentHover": (0.85, 0.45, 0.35),
+            "button": (0.55, 0.25, 0.2),
+            "buttonHover": (0.65, 0.35, 0.3),
+            "buttonPrimary": (0.5, 0.35, 0.2),
+            "buttonPrimaryHover": (0.6, 0.45, 0.3),
+            "bgGradientTop": (0.11, 0.09, 0.08),
+            "bgGradientBottom": (0.18, 0.14, 0.12),
+        },
     },
     "ice": {
-        "bg": "#0a1628",
-        "panel": "#12213a",
-        "accent": "#35baf6",
-        "text": "#e8f6ff",
-        "text_dim": "#9fb8c9",
-        "border": "#1c2d4a",
-        "stem_colors": ["#5bc0eb", "#9bc53d", "#e55934", "#7fdbff", "#3dccc7", "#c7f9cc"],
+        "dark": {
+            "accent": (0.2, 0.65, 0.75),
+            "accentHover": (0.3, 0.75, 0.85),
+            "button": (0.2, 0.5, 0.6),
+            "buttonHover": (0.3, 0.6, 0.7),
+            "buttonPrimary": (0.2, 0.55, 0.55),
+            "buttonPrimaryHover": (0.3, 0.65, 0.65),
+            "bgGradientTop": (0.08, 0.1, 0.12),
+            "bgGradientBottom": (0.14, 0.18, 0.2),
+        },
+        "light": {
+            "accent": (0.2, 0.65, 0.75),
+            "accentHover": (0.3, 0.75, 0.85),
+            "button": (0.2, 0.5, 0.6),
+            "buttonHover": (0.3, 0.6, 0.7),
+            "buttonPrimary": (0.2, 0.55, 0.55),
+            "buttonPrimaryHover": (0.3, 0.65, 0.65),
+            "bgGradientTop": (0.08, 0.1, 0.12),
+            "bgGradientBottom": (0.14, 0.18, 0.2),
+        },
     },
     "mono": {
-        "bg": "#1a1a1a",
-        "panel": "#222222",
-        "accent": "#ffffff",
-        "text": "#f0f0f0",
-        "text_dim": "#9a9a9a",
-        "border": "#2c2c2c",
-        "stem_colors": ["#d9d9d9", "#bfbfbf", "#a6a6a6", "#8c8c8c", "#737373", "#595959"],
+        "dark": {
+            "accent": (0.55, 0.55, 0.6),
+            "accentHover": (0.65, 0.65, 0.7),
+            "button": (0.35, 0.35, 0.4),
+            "buttonHover": (0.45, 0.45, 0.5),
+            "buttonPrimary": (0.4, 0.4, 0.45),
+            "buttonPrimaryHover": (0.5, 0.5, 0.55),
+            "bgGradientTop": (0.11, 0.11, 0.12),
+            "bgGradientBottom": (0.16, 0.16, 0.17),
+        },
+        "light": {
+            "accent": (0.55, 0.55, 0.6),
+            "accentHover": (0.65, 0.65, 0.7),
+            "button": (0.35, 0.35, 0.4),
+            "buttonHover": (0.45, 0.45, 0.5),
+            "buttonPrimary": (0.4, 0.4, 0.45),
+            "buttonPrimaryHover": (0.5, 0.5, 0.55),
+            "bgGradientTop": (0.11, 0.11, 0.12),
+            "bgGradientBottom": (0.16, 0.16, 0.17),
+        },
     },
 }
 
 
-def apply_theme(app: QtWidgets.QApplication, theme_name: str) -> None:
-    theme = THEMES.get(theme_name, THEMES["classic"])
-    bg = theme["bg"]
-    panel = theme["panel"]
-    accent = theme["accent"]
-    text = theme["text"]
-    text_dim = theme["text_dim"]
-    border = theme["border"]
+def resolve_theme(name: str, mode: str) -> ThemeVariant:
+    base = THEMES["classic"][mode]
+    overrides = THEMES.get(name, {}).get(mode, {})
+    resolved = dict(base)
+    resolved.update(overrides)
+    return resolved
+
+
+def to_qcolor(color: ColorTuple, alpha: float = 1.0) -> QColor:
+    r = max(0, min(1, color[0]))
+    g = max(0, min(1, color[1]))
+    b = max(0, min(1, color[2]))
+    qcolor = QColor.fromRgbF(r, g, b, alpha)
+    return qcolor
+
+
+def apply_theme(app: QtWidgets.QApplication | None, theme: ThemeVariant) -> None:
+    if app is None:
+        return
+    bg = to_qcolor(theme["bg"])
+    input_bg = to_qcolor(theme["inputBg"])
+    text = to_qcolor(theme["text"])
+    accent = to_qcolor(theme["accent"])
+    border = to_qcolor(theme["border"])
 
     palette = app.palette()
-    palette.setColor(QPalette.Window, QColor(bg))
-    palette.setColor(QPalette.Base, QColor(panel))
-    palette.setColor(QPalette.WindowText, QColor(text))
-    palette.setColor(QPalette.Text, QColor(text))
-    palette.setColor(QPalette.Button, QColor(panel))
-    palette.setColor(QPalette.ButtonText, QColor(text))
-    palette.setColor(QPalette.Highlight, QColor(accent))
-    palette.setColor(QPalette.HighlightedText, QColor(bg))
+    palette.setColor(QPalette.Window, bg)
+    palette.setColor(QPalette.Base, input_bg)
+    palette.setColor(QPalette.WindowText, text)
+    palette.setColor(QPalette.Text, text)
+    palette.setColor(QPalette.Button, input_bg)
+    palette.setColor(QPalette.ButtonText, text)
+    palette.setColor(QPalette.Highlight, accent)
+    palette.setColor(QPalette.HighlightedText, bg)
     app.setPalette(palette)
 
     app.setStyleSheet(
         f"""
-        QMainWindow {{
-            background: {bg};
-        }}
         QWidget {{
-            color: {text};
-            background: {bg};
+            color: {text.name()};
         }}
-        QToolBar, QFrame {{
-            background: {panel};
-            border: 1px solid {border};
-        }}
-        QPushButton, QToolButton {{
-            background: {panel};
-            border: 1px solid {border};
-            padding: 6px 10px;
-        }}
-        QPushButton:hover, QToolButton:hover {{
-            border-color: {accent};
+        QFrame {{
+            background: {input_bg.name()};
+            border: 1px solid {border.name()};
         }}
         QComboBox, QLineEdit {{
-            background: {panel};
-            border: 1px solid {border};
+            background: {input_bg.name()};
+            border: 1px solid {border.name()};
             padding: 4px;
         }}
         QSlider::groove:horizontal {{
             height: 6px;
-            background: {border};
+            background: {border.name()};
         }}
         QSlider::handle:horizontal {{
             width: 12px;
-            background: {accent};
+            background: {accent.name()};
             margin: -4px 0;
         }}
         QProgressBar {{
-            background: {panel};
-            border: 1px solid {border};
+            background: {input_bg.name()};
+            border: 1px solid {border.name()};
             text-align: center;
         }}
         QProgressBar::chunk {{
-            background: {accent};
+            background: {accent.name()};
         }}
         QLabel#dimText {{
-            color: {text_dim};
+            color: {to_qcolor(theme["textDim"]).name()};
         }}
         """
     )

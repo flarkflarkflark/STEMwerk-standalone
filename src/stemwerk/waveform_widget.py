@@ -25,7 +25,27 @@ class WaveformWidget(QtWidgets.QWidget):
         self._stem_peaks: Dict[str, Tuple[np.ndarray, np.ndarray]] = {}
         self._playhead_seconds: float = 0.0
         self._last_width: int = 0
+        self._background_color = QtGui.QColor("#1a1a1e")
+        self._border_color = QtGui.QColor("#444444")
+        self._grid_color = QtGui.QColor("#888888")
+        self._accent_color = QtGui.QColor("#5f8fe5")
+        self._text_color = QtGui.QColor("#ffffff")
         self.setMinimumHeight(150)
+
+    def set_theme(
+        self,
+        background: QtGui.QColor,
+        border: QtGui.QColor,
+        grid: QtGui.QColor,
+        accent: QtGui.QColor,
+        text: QtGui.QColor,
+    ) -> None:
+        self._background_color = QtGui.QColor(background)
+        self._border_color = QtGui.QColor(border)
+        self._grid_color = QtGui.QColor(grid)
+        self._accent_color = QtGui.QColor(accent)
+        self._text_color = QtGui.QColor(text)
+        self.update()
 
     def set_audio_data(self, audio: np.ndarray, sample_rate: int) -> None:
         if audio.ndim == 2:
@@ -113,10 +133,10 @@ class WaveformWidget(QtWidgets.QWidget):
         painter = QtGui.QPainter(self)
         painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing, True)
         rect = self.rect()
-        painter.fillRect(rect, self.palette().window())
+        painter.fillRect(rect, self._background_color)
 
         if self._audio_mono is None or self._sample_rate is None:
-            painter.setPen(self.palette().text().color())
+            painter.setPen(self._text_color)
             painter.drawText(rect, QtCore.Qt.AlignmentFlag.AlignCenter, "Drop an audio file to begin")
             return
 
@@ -136,8 +156,8 @@ class WaveformWidget(QtWidgets.QWidget):
 
         show_original = not self._stem_overlays or not any_visible
         if show_original:
-            self._draw_waveform(painter, mins, maxs, self.palette().highlight().color(), 120)
-            label_color = QtGui.QColor(self.palette().text().color())
+            self._draw_waveform(painter, mins, maxs, self._accent_color, 120)
+            label_color = QtGui.QColor(self._text_color)
             label_color.setAlphaF(0.4)
             font = painter.font()
             font.setPointSize(18)
@@ -160,6 +180,14 @@ class WaveformWidget(QtWidgets.QWidget):
                 stem_color = QtGui.QColor(color_hex)
                 base_alpha = int(0.8 * opacity * 255)
                 self._draw_waveform(painter, peaks[0], peaks[1], stem_color, base_alpha)
+
+        grid_color = QtGui.QColor(self._grid_color)
+        grid_color.setAlphaF(0.2)
+        painter.setPen(QtGui.QPen(grid_color, 1))
+        painter.drawLine(0, rect.center().y(), rect.width(), rect.center().y())
+
+        painter.setPen(QtGui.QPen(self._border_color, 1))
+        painter.drawRect(rect.adjusted(0, 0, -1, -1))
 
         if self._sample_rate and self._audio_mono.size > 0:
             total_seconds = self._audio_mono.size / float(self._sample_rate)
