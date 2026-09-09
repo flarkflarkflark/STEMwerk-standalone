@@ -20,13 +20,53 @@ def emit_event(event: str, **payload: Any) -> None:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="STEMwerk headless separation runner")
-    parser.add_argument("--input", required=True, type=Path)
-    parser.add_argument("--output-dir", required=True, type=Path)
+    parser.add_argument("--input", type=Path)
+    parser.add_argument("--output-dir", type=Path)
     parser.add_argument("--model", default="htdemucs")
     parser.add_argument("--device", default="auto")
     parser.add_argument("--quality", default="normal")
     parser.add_argument("--stem", action="append", dest="stems")
+    parser.add_argument(
+        "--probe",
+        action="store_true",
+        help="Report available models/devices/quality presets as a capabilities event and exit.",
+    )
     return parser
+
+
+def probe() -> int:
+    """Report stemwerk_core's capabilities without running any separation.
+
+    This is the only channel the GUI process uses to learn about models,
+    devices and quality presets -- it lets the GUI stay free of a direct
+    stemwerk_core/PyTorch dependency while still reflecting the real
+    processing runtime's capabilities.
+    """
+    from stemwerk_core import get_available_devices
+    from stemwerk_core.models import AVAILABLE_MODELS
+
+    try:
+        from stemwerk_core.separator import QUALITY_PRESETS
+
+        qualities = list(QUALITY_PRESETS)
+    except ImportError:
+        qualities = ["fast", "normal", "best"]
+
+    try:
+        from importlib.metadata import version
+
+        core_version = version("stemwerk-core")
+    except Exception:
+        core_version = "unknown"
+
+    emit_event(
+        "capabilities",
+        models=list(AVAILABLE_MODELS),
+        qualities=qualities,
+        devices=get_available_devices(),
+        core_version=core_version,
+    )
+    return 0
 
 
 def run(
@@ -86,7 +126,15 @@ def run(
 
 
 def main(argv: Optional[list[str]] = None) -> int:
-    args = build_parser().parse_args(argv)
+    parser = build_parser()
+    args = parser.parse_args(argv)
+
+    if args.probe:
+        return probe()
+
+    if args.input is None or args.output_dir is None:
+        parser.error("--input and --output-dir are required unless --probe is set")
+
     return run(
         input_file=args.input,
         output_dir=args.output_dir,

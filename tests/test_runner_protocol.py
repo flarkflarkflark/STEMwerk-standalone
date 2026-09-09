@@ -173,3 +173,72 @@ def test_main_forwards_quality_argument(tmp_path, capsys, fake_stemwerk_core) ->
     assert exit_code == 0
     assert _FakeStemSeparator.last_instance is not None
     assert _FakeStemSeparator.last_instance.quality == "fast"
+
+
+@pytest.fixture
+def fake_stemwerk_core_probe(monkeypatch):
+    """Install fake stemwerk_core/.models/.separator modules for probe() tests.
+
+    probe() is the GUI's only window into stemwerk_core's capabilities, so it
+    must be testable without a real stemwerk-core/PyTorch installation.
+    """
+
+    def _install(devices=None, models=None, qualities=None):
+        core_module = types.ModuleType("stemwerk_core")
+        core_module.get_available_devices = lambda: devices if devices is not None else []
+
+        models_module = types.ModuleType("stemwerk_core.models")
+        models_module.AVAILABLE_MODELS = models if models is not None else {}
+
+        separator_module = types.ModuleType("stemwerk_core.separator")
+        if qualities is not None:
+            separator_module.QUALITY_PRESETS = {name: index for index, name in enumerate(qualities)}
+
+        monkeypatch.setitem(sys.modules, "stemwerk_core", core_module)
+        monkeypatch.setitem(sys.modules, "stemwerk_core.models", models_module)
+        monkeypatch.setitem(sys.modules, "stemwerk_core.separator", separator_module)
+
+    return _install
+
+
+def test_probe_emits_capabilities_event(capsys, fake_stemwerk_core_probe) -> None:
+    fake_stemwerk_core_probe(
+        devices=[{"id": "auto", "name": "Auto", "type": "auto"}],
+        models={"htdemucs": "htdemucs.yaml", "htdemucs_6s": "htdemucs_6s.yaml"},
+        qualities=["fast", "normal", "best"],
+    )
+
+    exit_code = runner.probe()
+
+    assert exit_code == 0
+    record = json.loads(capsys.readouterr().out.strip())
+    assert record["event"] == "capabilities"
+    assert record["models"] == ["htdemucs", "htdemucs_6s"]
+    assert record["qualities"] == ["fast", "normal", "best"]
+    assert record["devices"] == [{"id": "auto", "name": "Auto", "type": "auto"}]
+    assert "core_version" in record
+
+
+def test_probe_falls_back_to_default_qualities_when_presets_missing(capsys, fake_stemwerk_core_probe) -> None:
+    fake_stemwerk_core_probe(devices=[], models={}, qualities=None)
+
+    exit_code = runner.probe()
+
+    assert exit_code == 0
+    record = json.loads(capsys.readouterr().out.strip())
+    assert record["qualities"] == ["fast", "normal", "best"]
+
+
+def test_main_dispatches_to_probe(capsys, fake_stemwerk_core_probe) -> None:
+    fake_stemwerk_core_probe(devices=[], models={"htdemucs": "htdemucs.yaml"}, qualities=["fast", "normal", "best"])
+
+    exit_code = runner.main(["--probe"])
+
+    assert exit_code == 0
+    record = json.loads(capsys.readouterr().out.strip())
+    assert record["event"] == "capabilities"
+
+
+def test_main_requires_input_and_output_dir_without_probe() -> None:
+    with pytest.raises(SystemExit):
+        runner.main([])
